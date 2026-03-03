@@ -2,6 +2,18 @@
 
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 
+## TDD Policy
+
+This project follows **Test-Driven Development**. Always follow the Red → Green → Refactor cycle.
+
+**Rules:**
+
+- Write a failing test first, then write the minimum production code to make it pass
+- Each package has a paired `_test.go` file (e.g., `internal/config/config_test.go`)
+- Use table-driven tests (standard Go convention)
+- Run `go test ./...` before closing any issue — all tests must pass
+- Do not write production code without a corresponding test
+
 ## Quick Reference
 
 ```bash
@@ -35,6 +47,98 @@ cp -rf source dest          # NOT: cp -r source dest
 - `ssh` - use `-o BatchMode=yes` to fail instead of prompting
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
+
+## Phase 1: Reference (Environment Variables, Exit Codes, Error Kinds, JSON Schema)
+
+### Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `CONFLUENCE_URL` | Yes | Confluence base URL (e.g. `https://confluence.example.com`) |
+| `CONFLUENCE_TOKEN` | Yes | Personal Access Token (PAT) |
+| `CONFLUENCE_DEFAULT_SPACE` | No | Default space key used when `--space` is omitted |
+| `CONFLUENCE_CLI_LOG` | No | Debug log file path. Omit to disable logging |
+| `CONFLUENCE_CLI_TIMEOUT` | No | Command-wide timeout (e.g. `30s`, `2m`). Default: `30s`. Overrideable with `--timeout` flag |
+| `CONFLUENCE_CLI_HOME` | No | Override `~/.confluence-cli/` directory |
+
+### Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success (includes empty search results, `--if-exists skip`) |
+| `1` | Validation error (invalid ID format, missing required flags) |
+| `2` | Auth error (invalid PAT, insufficient permissions) |
+| `3` | Network/server error (connection failure, 5xx, timeout, canceled) |
+| `4` | Resource not found (404) |
+| `5` | Conflict (`--if-exists error` with existing page, ambiguous title match) |
+
+### Error Kinds (`kind` field in JSON error output)
+
+| kind | exit code | description |
+|---|---|---|
+| `validation_error` | 1 | Input validation failure |
+| `auth_error` | 2 | Authentication failure |
+| `server_error` | 3 | Network failure or 5xx response |
+| `timeout` | 3 | `context.DeadlineExceeded` — consider retry or increasing timeout |
+| `canceled` | 3 | `context.Canceled` (SIGINT etc.) — intentional, do NOT retry |
+| `not_found` | 4 | Resource not found |
+| `conflict` | 5 | Conflict (duplicate title, etc.) |
+
+### `--json` Output Schema
+
+All `--json` output uses the unified envelope:
+
+**Success (stdout)**
+```json
+{
+  "schema_version": 1,
+  "command": "<command name>",
+  "result": { ... }
+}
+```
+
+**Error (stderr)**
+```json
+{
+  "schema_version": 1,
+  "command": "<command name>",
+  "error": {
+    "code": 4,
+    "kind": "not_found",
+    "message": "page 12345 not found"
+  }
+}
+```
+
+**Warning (stderr)** — operation succeeded but a side effect (e.g. history write) failed:
+```json
+{
+  "schema_version": 1,
+  "command": "<command name>",
+  "warning": {
+    "kind": "history_write_failed",
+    "message": "failed to write history: permission denied"
+  }
+}
+```
+
+#### `result` shape by command
+
+- List/search commands (`space list`, `page search`, `page tree`, `alias list`, `history list`): `result` is an **array**
+- `page get`: `result` is always an **array**; partial failures add `errors[]` at top level (exit 0)
+- All other commands: `result` is an **object**
+
+#### Phase 1 command examples
+
+**`ping`**
+```json
+{"schema_version":1,"command":"ping","result":{"ok":true,"url":"https://confluence.example.com"}}
+```
+
+**`version`**
+```json
+{"schema_version":1,"command":"version","result":{"version":"0.1.0","commit":"abc1234","built_at":"2026-03-03"}}
+```
 
 <!-- BEGIN BEADS INTEGRATION -->
 ## Issue Tracking with bd (beads)
