@@ -30,6 +30,7 @@ type envelope struct {
 	SchemaVersion int    `json:"schema_version"`
 	Command       string `json:"command"`
 	Result        any    `json:"result,omitempty"`
+	Errors        any    `json:"errors,omitempty"`
 	Error         any    `json:"error,omitempty"`
 	Warning       any    `json:"warning,omitempty"`
 }
@@ -41,6 +42,21 @@ func (w *Writer) Write(command string, result any) error {
 			SchemaVersion: 1,
 			Command:       command,
 			Result:        result,
+		})
+	}
+	_, err := fmt.Fprintln(w.Out, result)
+	return err
+}
+
+// WriteWithErrors は result と errors[] を同時に stdout に書き出す（部分失敗時用）。
+// errors が空の場合は通常の Write と同じ挙動になる。
+func (w *Writer) WriteWithErrors(command string, result any, errors any) error {
+	if w.JSON {
+		return json.NewEncoder(w.Out).Encode(envelope{
+			SchemaVersion: 1,
+			Command:       command,
+			Result:        result,
+			Errors:        errors,
 		})
 	}
 	_, err := fmt.Fprintln(w.Out, result)

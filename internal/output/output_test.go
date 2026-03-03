@@ -99,6 +99,33 @@ func TestWriteWarning_JSON(t *testing.T) {
 	}
 }
 
+func TestWriteWithErrors_JSON(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	w := output.New(true)
+	w.Out = &out
+	w.Err = &errBuf
+
+	result := []map[string]any{{"id": "1", "title": "Page A"}}
+	errs := []map[string]any{{"id": "999", "error": "not found"}}
+	if err := w.WriteWithErrors("page get", result, errs); err != nil {
+		t.Fatalf("WriteWithErrors: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\nraw: %s", err, out.String())
+	}
+	if got["schema_version"] != float64(1) {
+		t.Errorf("schema_version: got %v", got["schema_version"])
+	}
+	if _, ok := got["result"]; !ok {
+		t.Error("result field missing")
+	}
+	if _, ok := got["errors"]; !ok {
+		t.Error("errors field missing")
+	}
+}
+
 // --- 非 JSON モード ---
 
 func TestWrite_Text(t *testing.T) {

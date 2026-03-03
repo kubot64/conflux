@@ -140,6 +140,148 @@ All `--json` output uses the unified envelope:
 {"schema_version":1,"command":"version","result":{"version":"0.1.0","commit":"abc1234","built_at":"2026-03-03"}}
 ```
 
+## Phase 2: Command Reference
+
+### `space list`
+
+```bash
+conflux space list [--json]
+```
+
+JSON `result`: array of `{key, name, url}`
+
+```json
+{"schema_version":1,"command":"space list","result":[
+  {"key":"TEAM","name":"Team Space","url":"https://confluence.example.com/display/TEAM"}
+]}
+```
+
+---
+
+### `page search`
+
+```bash
+conflux page search [keyword] [--space SPACE] [--after YYYY-MM-DD] [--json]
+```
+
+- `keyword` — optional; searches full text
+- `--space` — filter by space key; falls back to `CONFLUENCE_DEFAULT_SPACE`, then all spaces
+- `--after` — filter pages modified after this date (ISO 8601)
+
+JSON `result`: array of `{id, title, space, last_modified, url}`
+
+```json
+{"schema_version":1,"command":"page search","result":[
+  {"id":"12345","title":"My Page","space":"TEAM","last_modified":"2024-01-01T00:00:00Z","url":"..."}
+]}
+```
+
+---
+
+### `page get`
+
+```bash
+conflux page get <page-ID> [page-ID ...] [--format markdown|html|storage] [--section NAME] [--max-chars N] [--json]
+```
+
+- Multiple IDs: partial failures do NOT abort; failed IDs appear in `errors[]` (exit 0)
+- `--format`: `markdown` (default, storage→GFM), `html`/`storage` (raw storage XHTML)
+- `--section`: extract content between named heading and next same-level heading
+- `--max-chars`: truncate body to N Unicode codepoints
+
+JSON `result`: always array of `{id, title, space, version, body, url}`
+JSON `errors`: present only when some IDs failed; array of `{id, error}`
+
+```json
+{"schema_version":1,"command":"page get",
+ "result":[{"id":"123","title":"Page A","space":"TEAM","version":5,"body":"# Hello\n\n...","url":"..."}],
+ "errors":[{"id":"999","error":"resource not found"}]
+}
+```
+
+---
+
+### `page tree`
+
+```bash
+conflux page tree [--space SPACE] [--depth N] [--json]
+```
+
+- `--space` — required unless `CONFLUENCE_DEFAULT_SPACE` is set
+- `--depth` — 1–10 (default 3)
+
+JSON `result`: flat list ordered by depth; `parent_id` is `null` for root pages
+
+```json
+{"schema_version":1,"command":"page tree","result":[
+  {"id":"100","title":"Root","parent_id":null,"depth":0,"url":"..."},
+  {"id":"101","title":"Child","parent_id":"100","depth":1,"url":"..."}
+]}
+```
+
+---
+
+### `attachment list`
+
+```bash
+conflux attachment list <page-ID> [--json]
+```
+
+JSON `result`: array of `{id, filename, size, media_type, url}`
+
+```json
+{"schema_version":1,"command":"attachment list","result":[
+  {"id":"att1","filename":"diagram.png","size":204800,"media_type":"image/png","url":"..."}
+]}
+```
+
+---
+
+### `alias` commands
+
+Aliases map short names to page IDs or space keys, persisted in `$CONFLUENCE_CLI_HOME/alias.json`.
+
+```bash
+conflux alias set <name> <target> [--type page|space]  # default type: page
+conflux alias get <name>
+conflux alias list
+conflux alias delete <name>
+```
+
+**`alias set` / `alias get`** JSON `result`: `{name, target, type}`
+
+```json
+{"schema_version":1,"command":"alias set","result":{"name":"home","target":"12345","type":"page"}}
+```
+
+**`alias list`** JSON `result`: array of `{name, target, type}`
+
+```json
+{"schema_version":1,"command":"alias list","result":[
+  {"name":"home","target":"12345","type":"page"},
+  {"name":"myspace","target":"MS","type":"space"}
+]}
+```
+
+**`alias delete`** JSON `result`: `{deleted: "<name>"}`
+
+```json
+{"schema_version":1,"command":"alias delete","result":{"deleted":"home"}}
+```
+
+#### Using aliases with other commands
+
+Aliases are resolved client-side — pass the resolved value to the command:
+
+```bash
+# Set alias
+conflux alias set home 12345
+# Use in page get
+conflux page get $(conflux alias get home --json | jq -r '.result.target')
+```
+
+---
+
 <!-- BEGIN BEADS INTEGRATION -->
 ## Issue Tracking with bd (beads)
 

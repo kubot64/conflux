@@ -1,10 +1,6 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-
 	"github.com/kubot64/conflux/internal/history"
 	"github.com/spf13/cobra"
 )
@@ -24,8 +20,7 @@ var historyListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "更新履歴を表示する",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dir := historyDir()
-		logger, err := history.NewLogger(dir)
+		logger, err := history.NewLogger(cliHomeDir())
 		if err != nil {
 			return err
 		}
@@ -63,21 +58,10 @@ var historyListCmd = &cobra.Command{
 	},
 }
 
-func historyDir() string {
-	if home := os.Getenv("CONFLUENCE_CLI_HOME"); home != "" {
-		return home
-	}
-	userHome, _ := os.UserHomeDir()
-	return filepath.Join(userHome, ".confluence-cli")
-}
-
 func init() {
 	historyListCmd.Flags().IntVar(&historyLimitFlag, "limit", 20, "表示件数")
 	historyListCmd.Flags().StringVar(&historySpaceFlag, "space", "", "スペースキーでフィルタ")
 	historyListCmd.Flags().StringVar(&historySessionFlag, "session", "", "セッションIDでフィルタ")
 	historyCmd.AddCommand(historyListCmd)
 	rootCmd.AddCommand(historyCmd)
-
-	// historyDir をコマンドから参照するためのデバッグ用
-	_ = fmt.Sprintf
 }
