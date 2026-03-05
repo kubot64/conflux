@@ -1,0 +1,56 @@
+name: Security Settings Audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 1"
+
+permissions:
+  contents: read
+  administration: read
+
+jobs:
+  audit:
+    name: Audit repository security settings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify security settings
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+
+            const repository = await github.rest.repos.get({ owner, repo });
+            const analysis = repository.data.security_and_analysis || {};
+            const failures = [];
+
+            if (analysis.secret_scanning?.status !== "enabled") {
+              failures.push("secret_scanning is not enabled");
+            }
+
+            if (analysis.secret_scanning_push_protection?.status !== "enabled") {
+              failures.push("secret_scanning_push_protection is not enabled");
+            }
+
+            let privateVulnEnabled = false;
+            try {
+              const pvr = await github.request(
+                "GET /repos/{owner}/{repo}/private-vulnerability-reporting",
+                { owner, repo }
+              );
+              privateVulnEnabled = pvr.data?.enabled === true;
+            } catch (error) {
+              failures.push(
+                `failed to query private vulnerability reporting: ${error.message}`
+              );
+            }
+
+            if (!privateVulnEnabled) {
+              failures.push("private vulnerability reporting is not enabled");
+            }
+
+            if (failures.length > 0) {
+              core.setFailed(failures.join("\n"));
+            } else {
+              core.info("Security settings audit passed.");
+            }
