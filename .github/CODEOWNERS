@@ -1,0 +1,11 @@
+# Default owners
+* @kubot64
+
+# Core implementation
+/cmd/ @kubot64
+/internal/ @kubot64
+
+# Security-sensitive paths
+/.github/workflows/ @kubot64
+/infra/ @kubot64
+/auth/ @kubot64
