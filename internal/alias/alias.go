@@ -16,7 +16,7 @@ type Store struct {
 
 // NewStore は指定パスに alias.json を管理する Store を生成する。
 func NewStore(path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
 	return &Store{path: path}, nil
@@ -49,7 +49,7 @@ func (s *Store) save(records []aliasRecord) error {
 		return err
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)

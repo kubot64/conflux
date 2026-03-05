@@ -33,9 +33,6 @@ var pageSearchCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := validateCredentials(cfg); err != nil {
-			return err
-		}
 
 		keyword := ""
 		if len(args) > 0 {
@@ -106,9 +103,6 @@ var pageGetCmd = &cobra.Command{
 
 		cfg, err := config.Load()
 		if err != nil {
-			return err
-		}
-		if err := validateCredentials(cfg); err != nil {
 			return err
 		}
 
@@ -219,9 +213,6 @@ var pageTreeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := validateCredentials(cfg); err != nil {
-			return err
-		}
 
 		space := pageTreeSpaceFlag
 		if space == "" {
@@ -303,9 +294,6 @@ var pageCreateCmd = &cobra.Command{
 
 		cfg, err := config.Load()
 		if err != nil {
-			return err
-		}
-		if err := validateCredentials(cfg); err != nil {
 			return err
 		}
 
@@ -464,9 +452,6 @@ var pageUpdateCmd = &cobra.Command{
 
 		cfg, err := config.Load()
 		if err != nil {
-			return err
-		}
-		if err := validateCredentials(cfg); err != nil {
 			return err
 		}
 

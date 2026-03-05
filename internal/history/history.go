@@ -18,7 +18,7 @@ type Logger struct {
 
 // NewLogger は指定ディレクトリに history.json を管理する Logger を生成する。
 func NewLogger(dir string) (*Logger, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
 	return &Logger{dir: dir}, nil
@@ -69,7 +69,7 @@ func (l *Logger) save(hf *historyFile) error {
 	}
 
 	// アトミック書き込み: temp ファイルに書き出してから rename
-	if err := os.WriteFile(l.tmpPath(), data, 0644); err != nil {
+	if err := os.WriteFile(l.tmpPath(), data, 0600); err != nil {
 		return err
 	}
 	return os.Rename(l.tmpPath(), l.path())

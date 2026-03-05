@@ -28,15 +28,29 @@ type Client struct {
 	baseURL    string
 	token      string
 	httpClient *http.Client
+	userAgent  string
 }
 
 // New は Client を生成する。
-func New(baseURL, token string) *Client {
-	return &Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		token:      token,
-		httpClient: &http.Client{},
+func New(baseURL, token string, insecure bool) *Client {
+	c := &Client{
+		baseURL:   strings.TrimRight(baseURL, "/"),
+		token:     token,
+		userAgent: "conflux/1.0.0", // TODO: バージョン情報を cmd から渡せるようにする
 	}
+	c.httpClient = &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			// HTTPS から HTTP へのダウングレードを禁止
+			if !insecure && via[0].URL.Scheme == "https" && req.URL.Scheme == "http" {
+				return fmt.Errorf("insecure redirect from https to http")
+			}
+			return nil
+		},
+	}
+	return c
 }
 
 // --- 内部ヘルパー ---
@@ -48,6 +62,7 @@ func (c *Client) newReq(ctx context.Context, method, path string, body io.Reader
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
 	return req, nil
 }
 
@@ -279,16 +294,23 @@ type searchResponse struct {
 	} `json:"results"`
 }
 
+// escapeCQL は Confluence CQL クエリの文字列値をエスケープする。
+func escapeCQL(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
+}
+
 func (c *Client) SearchPages(ctx context.Context, keyword, space, after string) ([]port.PageSearchResult, error) {
 	cql := `type=page`
 	if space != "" {
-		cql += fmt.Sprintf(` AND space="%s"`, space)
+		cql += fmt.Sprintf(` AND space="%s"`, escapeCQL(space))
 	}
 	if keyword != "" {
-		cql += fmt.Sprintf(` AND text~"%s"`, keyword)
+		cql += fmt.Sprintf(` AND text~"%s"`, escapeCQL(keyword))
 	}
 	if after != "" {
-		cql += fmt.Sprintf(` AND lastModified>"%s"`, after)
+		cql += fmt.Sprintf(` AND lastModified>"%s"`, escapeCQL(after))
 	}
 	path := fmt.Sprintf("/rest/api/content/search?cql=%s&expand=history.lastUpdated,space&limit=50",
 		urlEncode(cql))
@@ -320,8 +342,7 @@ func (c *Client) SearchPages(ctx context.Context, keyword, space, after string) 
 }
 
 func (c *Client) FindPagesByTitle(ctx context.Context, space, title string) ([]port.PageSearchResult, error) {
-	escaped := strings.ReplaceAll(title, `"`, `\"`)
-	cql := fmt.Sprintf(`type=page AND space="%s" AND title="%s"`, space, escaped)
+	cql := fmt.Sprintf(`type=page AND space="%s" AND title="%s"`, escapeCQL(space), escapeCQL(title))
 	path := fmt.Sprintf("/rest/api/content/search?cql=%s&expand=history.lastUpdated,space&limit=10", urlEncode(cql))
 	req, err := c.newReq(ctx, http.MethodGet, path, nil)
 	if err != nil {
@@ -577,6 +598,42 @@ func (c *Client) DownloadAttachment(ctx context.Context, attachmentID string) (i
 		return nil, err
 	}
 	return resp.Body, nil
+}
+
+func (c *Client) GetAttachment(ctx context.Context, attachmentID string) (*port.Attachment, error) {
+	path := fmt.Sprintf("/rest/api/content/%s", attachmentID)
+	req, err := c.newReq(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do(req, false)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var r struct {
+		ID         string `json:"id"`
+		Title      string `json:"title"`
+		Extensions struct {
+			MediaType string `json:"mediaType"`
+			FileSize  int64  `json:"fileSize"`
+		} `json:"extensions"`
+		Links struct {
+			Base     string `json:"base"`
+			Download string `json:"download"`
+		} `json:"_links"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
+	}
+	return &port.Attachment{
+		ID:        r.ID,
+		Filename:  r.Title,
+		Size:      r.Extensions.FileSize,
+		MediaType: r.Extensions.MediaType,
+		URL:       r.Links.Base + r.Links.Download,
+	}, nil
 }
 
 func urlEncode(s string) string {

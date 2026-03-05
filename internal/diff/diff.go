@@ -1,85 +1,47 @@
 // Package diff は unified diff 生成を提供する。
+// github.com/sergi/go-diff/diffmatchpatch を使い行単位の差分を計算する。
 package diff
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 const contextLines = 3
 
 // Unified は before と after の unified diff 文字列を返す。
-// nameA, nameB はファイル名ラベル（例: "before", "after"）。
+// nameA, nameB はファイル名ラベル（例: "current", "new"）。
 // 差分がない場合は空文字列を返す。
 func Unified(before, after, nameA, nameB string) string {
-	aLines := splitLines(before)
-	bLines := splitLines(after)
-	edits := computeEdits(aLines, bLines)
-	return formatUnified(edits, aLines, bLines, nameA, nameB)
-}
+	dmp := diffmatchpatch.New()
 
-type editKind int
+	// 行単位の diff を計算
+	aChars, bChars, lineArray := dmp.DiffLinesToChars(before, after)
+	diffs := dmp.DiffMain(aChars, bChars, false)
+	diffs = dmp.DiffCharsToLines(diffs, lineArray)
 
-const (
-	editEqual  editKind = iota
-	editDelete          // aLines のみに存在
-	editInsert          // bLines のみに存在
-)
-
-type edit struct {
-	kind editKind
-	aIdx int // aLines インデックス（Equal/Delete）
-	bIdx int // bLines インデックス（Equal/Insert）
-}
-
-// computeEdits は LCS を用いて編集操作列を返す。
-func computeEdits(a, b []string) []edit {
-	m, n := len(a), len(b)
-	dp := make([][]int, m+1)
-	for i := range dp {
-		dp[i] = make([]int, n+1)
+	// 行単位の操作リストに展開
+	type lineOp struct {
+		op   diffmatchpatch.Operation
+		text string
 	}
-	for i := 1; i <= m; i++ {
-		for j := 1; j <= n; j++ {
-			if a[i-1] == b[j-1] {
-				dp[i][j] = dp[i-1][j-1] + 1
-			} else if dp[i-1][j] >= dp[i][j-1] {
-				dp[i][j] = dp[i-1][j]
-			} else {
-				dp[i][j] = dp[i][j-1]
+	var lines []lineOp
+	for _, d := range diffs {
+		parts := strings.Split(d.Text, "\n")
+		for _, p := range parts {
+			if p == "" {
+				continue
 			}
+			lines = append(lines, lineOp{op: d.Type, text: p})
 		}
 	}
 
-	// バックトレースで編集列を構築（逆順で追加してから反転）
-	var edits []edit
-	i, j := m, n
-	for i > 0 || j > 0 {
-		switch {
-		case i > 0 && j > 0 && a[i-1] == b[j-1]:
-			edits = append(edits, edit{editEqual, i - 1, j - 1})
-			i--
-			j--
-		case j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]):
-			edits = append(edits, edit{editInsert, -1, j - 1})
-			j--
-		default:
-			edits = append(edits, edit{editDelete, i - 1, -1})
-			i--
-		}
-	}
-	for l, r := 0, len(edits)-1; l < r; l, r = l+1, r-1 {
-		edits[l], edits[r] = edits[r], edits[l]
-	}
-	return edits
-}
-
-// formatUnified は編集列を unified diff 形式の文字列に変換する。
-func formatUnified(edits []edit, a, b []string, nameA, nameB string) string {
-	n := len(edits)
+	n := len(lines)
 	hasChange := false
-	for _, e := range edits {
-		if e.kind != editEqual {
+	for _, l := range lines {
+		if l.op != diffmatchpatch.DiffEqual {
 			hasChange = true
 			break
 		}
@@ -88,10 +50,10 @@ func formatUnified(edits []edit, a, b []string, nameA, nameB string) string {
 		return ""
 	}
 
-	// 各編集が出力に含まれるか（変更行 ± contextLines の範囲）
+	// 変更行 ± contextLines の範囲を include フラグで管理
 	include := make([]bool, n)
-	for i, e := range edits {
-		if e.kind != editEqual {
+	for i, l := range lines {
+		if l.op != diffmatchpatch.DiffEqual {
 			lo := i - contextLines
 			if lo < 0 {
 				lo = 0
@@ -115,7 +77,7 @@ func formatUnified(edits []edit, a, b []string, nameA, nameB string) string {
 			i++
 			continue
 		}
-		// ハンク開始: include が true の連続範囲を収集
+
 		hunkStart := i
 		hunkEnd := i
 		for hunkEnd < n && include[hunkEnd] {
@@ -125,38 +87,37 @@ func formatUnified(edits []edit, a, b []string, nameA, nameB string) string {
 		// ハンク先頭の a/b オフセットを計算
 		aStart, bStart := 0, 0
 		for k := 0; k < hunkStart; k++ {
-			switch edits[k].kind {
-			case editEqual:
+			switch lines[k].op {
+			case diffmatchpatch.DiffEqual:
 				aStart++
 				bStart++
-			case editDelete:
+			case diffmatchpatch.DiffDelete:
 				aStart++
-			case editInsert:
+			case diffmatchpatch.DiffInsert:
 				bStart++
 			}
 		}
 
-		// ハンク内の行を構築
 		aCount, bCount := 0, 0
-		var lines []string
+		var hunkLines []string
 		for k := hunkStart; k < hunkEnd; k++ {
-			e := edits[k]
-			switch e.kind {
-			case editEqual:
-				lines = append(lines, " "+a[e.aIdx])
+			l := lines[k]
+			switch l.op {
+			case diffmatchpatch.DiffEqual:
+				hunkLines = append(hunkLines, " "+l.text)
 				aCount++
 				bCount++
-			case editDelete:
-				lines = append(lines, "-"+a[e.aIdx])
+			case diffmatchpatch.DiffDelete:
+				hunkLines = append(hunkLines, "-"+l.text)
 				aCount++
-			case editInsert:
-				lines = append(lines, "+"+b[e.bIdx])
+			case diffmatchpatch.DiffInsert:
+				hunkLines = append(hunkLines, "+"+l.text)
 				bCount++
 			}
 		}
 
 		fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", aStart+1, aCount, bStart+1, bCount)
-		for _, l := range lines {
+		for _, l := range hunkLines {
 			sb.WriteString(l)
 			sb.WriteByte('\n')
 		}
@@ -164,15 +125,4 @@ func formatUnified(edits []edit, a, b []string, nameA, nameB string) string {
 		i = hunkEnd
 	}
 	return sb.String()
-}
-
-func splitLines(s string) []string {
-	if s == "" {
-		return nil
-	}
-	lines := strings.Split(s, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	return lines
 }

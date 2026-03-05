@@ -69,6 +69,7 @@ type AttachmentClient interface {
 	ListAttachments(ctx context.Context, pageID string) ([]Attachment, error)
 	UploadAttachment(ctx context.Context, pageID, filename string, r io.Reader) (*Attachment, error)
 	DownloadAttachment(ctx context.Context, attachmentID string) (io.ReadCloser, error)
+	GetAttachment(ctx context.Context, attachmentID string) (*Attachment, error)
 }
 
 // --- Converter ---

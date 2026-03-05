@@ -52,6 +52,7 @@ type MockAttachmentClient struct {
 	ListAttachmentsFn    func(ctx context.Context, pageID string) ([]port.Attachment, error)
 	UploadAttachmentFn   func(ctx context.Context, pageID, filename string, r io.Reader) (*port.Attachment, error)
 	DownloadAttachmentFn func(ctx context.Context, attachmentID string) (io.ReadCloser, error)
+	GetAttachmentFn      func(ctx context.Context, attachmentID string) (*port.Attachment, error)
 }
 
 func (m *MockAttachmentClient) ListAttachments(ctx context.Context, pageID string) ([]port.Attachment, error) {
@@ -62,6 +63,9 @@ func (m *MockAttachmentClient) UploadAttachment(ctx context.Context, pageID, fil
 }
 func (m *MockAttachmentClient) DownloadAttachment(ctx context.Context, attachmentID string) (io.ReadCloser, error) {
 	return m.DownloadAttachmentFn(ctx, attachmentID)
+}
+func (m *MockAttachmentClient) GetAttachment(ctx context.Context, attachmentID string) (*port.Attachment, error) {
+	return m.GetAttachmentFn(ctx, attachmentID)
 }
 
 // MockConverter はテスト用 Converter モック。

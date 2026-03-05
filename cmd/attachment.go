@@ -34,9 +34,6 @@ var attachmentListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := validateCredentials(cfg); err != nil {
-			return err
-		}
 
 		c := newClient(cfg)
 		attachments, err := c.ListAttachments(cmd.Context(), pageID)
@@ -93,9 +90,6 @@ var attachmentUploadCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := validateCredentials(cfg); err != nil {
-			return err
-		}
 
 		c := newClient(cfg)
 		uploaded, err := c.UploadAttachment(cmd.Context(), pageID, filepath.Base(filename), f)
@@ -150,11 +144,34 @@ var attachmentDownloadCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := validateCredentials(cfg); err != nil {
+		if err := cfg.Validate(); err != nil {
 			return err
 		}
 
 		c := newClient(cfg)
+
+		// --output 未指定時は API でファイル名を取得
+		destFilename := attachmentDownloadOutputFlag
+		if destFilename == "" {
+			meta, err := c.GetAttachment(cmd.Context(), attachmentID)
+			if err != nil {
+				return err
+			}
+			destFilename = meta.Filename
+			if destFilename == "" {
+				destFilename = attachmentID
+			}
+		}
+
+		// path traversal 対策: 相対パスが上位ディレクトリへ抜けることを禁止
+		if destFilename != "-" && !filepath.IsAbs(destFilename) {
+			cleaned := filepath.Clean(destFilename)
+			if len(cleaned) >= 2 && cleaned[:2] == ".." {
+				return apperror.New(apperror.KindValidation, "output path must not escape the current directory; use an absolute path")
+			}
+			destFilename = cleaned
+		}
+
 		rc, err := c.DownloadAttachment(cmd.Context(), attachmentID)
 		if err != nil {
 			return err
@@ -162,13 +179,9 @@ var attachmentDownloadCmd = &cobra.Command{
 		defer rc.Close()
 
 		var out io.Writer
-		destFilename := attachmentDownloadOutputFlag
 		if destFilename == "-" {
 			out = os.Stdout
 		} else {
-			if destFilename == "" {
-				destFilename = attachmentID
-			}
 			f, err := os.Create(destFilename)
 			if err != nil {
 				return apperror.New(apperror.KindServer, fmt.Sprintf("create file: %v", err))
@@ -181,7 +194,7 @@ var attachmentDownloadCmd = &cobra.Command{
 			return apperror.New(apperror.KindServer, fmt.Sprintf("download failed: %v", err))
 		}
 
-		if attachmentDownloadOutputFlag != "-" {
+		if destFilename != "-" {
 			fmt.Printf("Downloaded to %s\n", destFilename)
 		}
 		return nil

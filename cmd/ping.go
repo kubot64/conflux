@@ -18,12 +18,6 @@ var pingCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if cfg.URL == "" {
-			return apperror.New(apperror.KindValidation, "CONFLUENCE_URL is not set")
-		}
-		if cfg.Token == "" {
-			return apperror.New(apperror.KindValidation, "CONFLUENCE_TOKEN is not set")
-		}
 
 		w := newWriter()
 		ctx := cmd.Context()
@@ -34,6 +28,7 @@ var pingCmd = &cobra.Command{
 			return apperror.New(apperror.KindServer, fmt.Sprintf("request: %v", err))
 		}
 		req.Header.Set("Authorization", "Bearer "+cfg.Token)
+		req.Header.Set("User-Agent", "conflux/1.0.0")
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

@@ -24,6 +24,16 @@ func buildBinary(t *testing.T) string {
 	return binPath
 }
 
+// testEnv は httptest サーバー URL とトークンを含むテスト用環境変数を返す。
+// CONFLUENCE_ALLOW_INSECURE=true を含み、http:// URL を許可する。
+func testEnv(srvURL string) []string {
+	return append(os.Environ(),
+		"CONFLUENCE_URL="+srvURL,
+		"CONFLUENCE_TOKEN=test-token",
+		"CONFLUENCE_ALLOW_INSECURE=true",
+	)
+}
+
 // pageAPIHandler は page get テスト用のモック API ハンドラを返す。
 // validIDs に含まれる ID は 200、それ以外は 404 を返す。
 func pageAPIHandler(t *testing.T, validIDs map[string]bool) http.Handler {

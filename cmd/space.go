@@ -20,9 +20,6 @@ var spaceListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := validateCredentials(cfg); err != nil {
-			return err
-		}
 
 		c := newClient(cfg)
 		spaces, err := c.ListSpaces(cmd.Context())

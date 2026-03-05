@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	jsonFlag    bool
-	timeoutFlag string
+	jsonFlag          bool
+	timeoutFlag       string
+	allowInsecureFlag bool
 )
 
 var rootCmd = &cobra.Command{
@@ -27,6 +28,11 @@ var rootCmd = &cobra.Command{
 		cfg, err := config.Load()
 		if err != nil {
 			return err
+		}
+		cfg.Insecure = allowInsecureFlag
+
+		if err := cfg.Validate(); err != nil {
+			return apperror.New(apperror.KindValidation, err.Error())
 		}
 
 		// タイムアウト優先順位: --timeout > CONFLUENCE_CLI_TIMEOUT > 30s
@@ -57,6 +63,7 @@ func Execute() error {
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "JSON 形式で出力する")
 	rootCmd.PersistentFlags().StringVar(&timeoutFlag, "timeout", "", "コマンドタイムアウト（例: 30s, 2m）")
+	rootCmd.PersistentFlags().BoolVar(&allowInsecureFlag, "allow-insecure", false, "http:// の使用を許可する")
 }
 
 // newWriter は --json フラグに基づいて output.Writer を生成する。

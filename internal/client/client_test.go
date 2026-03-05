@@ -13,7 +13,7 @@ import (
 
 func newTestClient(t *testing.T, srv *httptest.Server) *client.Client {
 	t.Helper()
-	return client.New(srv.URL, "test-token")
+	return client.New(srv.URL, "test-token", true)
 }
 
 // --- リトライ: GET は 429/5xx で再試行 ---
