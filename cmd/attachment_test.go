@@ -74,10 +74,7 @@ func TestAttachmentUpload(t *testing.T) {
 		}
 
 		cmd := exec.Command(bin, "attachment", "upload", "--json", "12345", tmpFile)
-		cmd.Env = append(os.Environ(),
-			"CONFLUENCE_URL="+srv.URL,
-			"CONFLUENCE_TOKEN=test-token",
-		)
+		cmd.Env = testEnv(srv.URL)
 
 		out, err := cmd.Output()
 		if err != nil {
@@ -105,10 +102,7 @@ func TestAttachmentUpload(t *testing.T) {
 		defer srv.Close()
 
 		cmd := exec.Command(bin, "attachment", "upload", "--json", "12345", "/nonexistent/file.txt")
-		cmd.Env = append(os.Environ(),
-			"CONFLUENCE_URL="+srv.URL,
-			"CONFLUENCE_TOKEN=test-token",
-		)
+		cmd.Env = testEnv(srv.URL)
 
 		out, err := cmd.Output()
 		if err == nil {
@@ -133,10 +127,7 @@ func TestAttachmentDownload(t *testing.T) {
 		defer srv.Close()
 
 		cmd := exec.Command(bin, "attachment", "download", "--output", "-", "att-001")
-		cmd.Env = append(os.Environ(),
-			"CONFLUENCE_URL="+srv.URL,
-			"CONFLUENCE_TOKEN=test-token",
-		)
+		cmd.Env = testEnv(srv.URL)
 
 		out, err := cmd.Output()
 		if err != nil {
@@ -153,10 +144,7 @@ func TestAttachmentDownload(t *testing.T) {
 
 		outFile := filepath.Join(t.TempDir(), "downloaded.txt")
 		cmd := exec.Command(bin, "attachment", "download", "--output", outFile, "att-001")
-		cmd.Env = append(os.Environ(),
-			"CONFLUENCE_URL="+srv.URL,
-			"CONFLUENCE_TOKEN=test-token",
-		)
+		cmd.Env = testEnv(srv.URL)
 
 		if out, err := cmd.Output(); err != nil {
 			t.Fatalf("expected exit 0: %v\nstdout: %s", err, out)
@@ -177,10 +165,7 @@ func TestAttachmentDownload(t *testing.T) {
 		defer srv.Close()
 
 		cmd := exec.Command(bin, "attachment", "download", "-o", "-", "att-001")
-		cmd.Env = append(os.Environ(),
-			"CONFLUENCE_URL="+srv.URL,
-			"CONFLUENCE_TOKEN=test-token",
-		)
+		cmd.Env = testEnv(srv.URL)
 
 		out, err := cmd.Output()
 		if err != nil {

@@ -29,7 +29,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		cfg.Insecure = allowInsecureFlag
+		cfg.Insecure = cfg.Insecure || allowInsecureFlag
 
 		if err := cfg.Validate(); err != nil {
 			return apperror.New(apperror.KindValidation, err.Error())

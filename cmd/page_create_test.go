@@ -168,10 +168,7 @@ func TestPageCreate_IfExists(t *testing.T) {
 			}
 
 			cmd := exec.Command(bin, args...)
-			cmd.Env = append(os.Environ(),
-				"CONFLUENCE_URL="+srv.URL,
-				"CONFLUENCE_TOKEN=test-token",
-			)
+			cmd.Env = testEnv(srv.URL)
 
 			out, err := cmd.Output()
 			if tt.wantExitCode == 0 {

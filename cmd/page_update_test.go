@@ -84,10 +84,7 @@ func TestPageUpdate(t *testing.T) {
 		}
 
 		cmd := exec.Command(bin, "page", "update", "--json", pageID, mdFile)
-		cmd.Env = append(os.Environ(),
-			"CONFLUENCE_URL="+srv.URL,
-			"CONFLUENCE_TOKEN=test-token",
-		)
+		cmd.Env = testEnv(srv.URL)
 
 		out, err := cmd.Output()
 		if err != nil {
@@ -120,10 +117,7 @@ func TestPageUpdate(t *testing.T) {
 		}
 
 		cmd := exec.Command(bin, "page", "update", "--json", "--dry-run", pageID, mdFile)
-		cmd.Env = append(os.Environ(),
-			"CONFLUENCE_URL="+srv.URL,
-			"CONFLUENCE_TOKEN=test-token",
-		)
+		cmd.Env = testEnv(srv.URL)
 
 		out, err := cmd.Output()
 		if err != nil {
@@ -152,10 +146,7 @@ func TestPageUpdate(t *testing.T) {
 		defer srv.Close()
 
 		cmd := exec.Command(bin, "page", "update", "--json", "99999")
-		cmd.Env = append(os.Environ(),
-			"CONFLUENCE_URL="+srv.URL,
-			"CONFLUENCE_TOKEN=test-token",
-		)
+		cmd.Env = testEnv(srv.URL)
 
 		out, err := cmd.Output()
 		if err == nil {

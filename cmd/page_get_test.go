@@ -115,10 +115,7 @@ func TestPageGet_PartialFailure(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			args := append([]string{"page", "get", "--json", "--format", "storage"}, tt.ids...)
 			cmd := exec.Command(bin, args...)
-			cmd.Env = append(os.Environ(),
-				"CONFLUENCE_URL="+srv.URL,
-				"CONFLUENCE_TOKEN=test-token",
-			)
+			cmd.Env = testEnv(srv.URL)
 
 			out, err := cmd.Output()
 			// exit code は常に 0 であること（部分失敗でも exit 0）
