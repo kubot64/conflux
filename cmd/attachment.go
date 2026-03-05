@@ -2,9 +2,15 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/kubot64/conflux/internal/apperror"
 	"github.com/kubot64/conflux/internal/config"
+	"github.com/kubot64/conflux/internal/history"
+	"github.com/kubot64/conflux/internal/port"
 	"github.com/kubot64/conflux/internal/validator"
 	"github.com/spf13/cobra"
 )
@@ -67,7 +73,125 @@ var attachmentListCmd = &cobra.Command{
 	},
 }
 
+var attachmentUploadCmd = &cobra.Command{
+	Use:   "upload <page-ID> <file>",
+	Short: "指定ページにファイルを添付する",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		pageID, filename := args[0], args[1]
+		if err := validator.PageID(pageID); err != nil {
+			return apperror.New(apperror.KindValidation, err.Error())
+		}
+
+		f, err := os.Open(filename)
+		if err != nil {
+			return apperror.New(apperror.KindValidation, fmt.Sprintf("open file: %v", err))
+		}
+		defer f.Close()
+
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		if err := validateCredentials(cfg); err != nil {
+			return err
+		}
+
+		c := newClient(cfg)
+		uploaded, err := c.UploadAttachment(cmd.Context(), pageID, filepath.Base(filename), f)
+		if err != nil {
+			return err
+		}
+
+		// 履歴の記録
+		logger, _ := history.NewLogger(cliHomeDir())
+		if logger != nil {
+			_ = logger.Log(port.HistoryEntry{
+				Timestamp: time.Now(),
+				SessionID: os.Getenv("CONFLUENCE_CLI_SESSION_ID"),
+				Action:    "uploaded",
+				PageID:    pageID,
+				Title:     uploaded.Filename,
+			})
+		}
+
+		type uploadResult struct {
+			ID       string `json:"id"`
+			Filename string `json:"filename"`
+			Size     int64  `json:"size"`
+			URL      string `json:"url"`
+		}
+		r := uploadResult{
+			ID:       uploaded.ID,
+			Filename: uploaded.Filename,
+			Size:     uploaded.Size,
+			URL:      uploaded.URL,
+		}
+
+		w := newWriter()
+		if jsonFlag {
+			return w.Write("attachment upload", r)
+		}
+		fmt.Printf("Uploaded: %s (%s) %d bytes\n", uploaded.Filename, uploaded.ID, uploaded.Size)
+		return nil
+	},
+}
+
+var attachmentDownloadOutputFlag string
+
+var attachmentDownloadCmd = &cobra.Command{
+	Use:   "download <attachment-ID>",
+	Short: "添付ファイルをダウンロードする",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		attachmentID := args[0]
+
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		if err := validateCredentials(cfg); err != nil {
+			return err
+		}
+
+		c := newClient(cfg)
+		rc, err := c.DownloadAttachment(cmd.Context(), attachmentID)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+
+		var out io.Writer
+		destFilename := attachmentDownloadOutputFlag
+		if destFilename == "-" {
+			out = os.Stdout
+		} else {
+			if destFilename == "" {
+				destFilename = attachmentID
+			}
+			f, err := os.Create(destFilename)
+			if err != nil {
+				return apperror.New(apperror.KindServer, fmt.Sprintf("create file: %v", err))
+			}
+			defer f.Close()
+			out = f
+		}
+
+		if _, err := io.Copy(out, rc); err != nil {
+			return apperror.New(apperror.KindServer, fmt.Sprintf("download failed: %v", err))
+		}
+
+		if attachmentDownloadOutputFlag != "-" {
+			fmt.Printf("Downloaded to %s\n", destFilename)
+		}
+		return nil
+	},
+}
+
 func init() {
 	attachmentCmd.AddCommand(attachmentListCmd)
+	attachmentCmd.AddCommand(attachmentUploadCmd)
+	attachmentDownloadCmd.Flags().StringVarP(&attachmentDownloadOutputFlag, "output", "o", "", "出力先ファイルパス（'-' で標準出力）")
+	attachmentCmd.AddCommand(attachmentDownloadCmd)
 	rootCmd.AddCommand(attachmentCmd)
 }

@@ -1,11 +1,13 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -505,9 +507,63 @@ func (c *Client) ListAttachments(ctx context.Context, pageID string) ([]port.Att
 	return attachments, nil
 }
 
-func (c *Client) UploadAttachment(ctx context.Context, pageID, filename string, body io.Reader) (*port.Attachment, error) {
-	// multipart/form-data アップロード（フェーズ3で詳細実装）
-	return nil, apperror.New(apperror.KindServer, "not implemented")
+func (c *Client) UploadAttachment(ctx context.Context, pageID, filename string, r io.Reader) (*port.Attachment, error) {
+	var b bytes.Buffer
+	mw := multipart.NewWriter(&b)
+
+	part, err := mw.CreateFormFile("file", filename)
+	if err != nil {
+		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("create form file: %v", err))
+	}
+	if _, err := io.Copy(part, r); err != nil {
+		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("copy file content: %v", err))
+	}
+	mw.Close()
+
+	path := fmt.Sprintf("/rest/api/content/%s/child/attachment", pageID)
+	req, err := c.newReq(ctx, http.MethodPost, path, &b)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("X-Atlassian-Token", "nocheck")
+
+	resp, err := c.do(req, true)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Results []struct {
+			ID         string `json:"id"`
+			Title      string `json:"title"`
+			Extensions struct {
+				MediaType string `json:"mediaType"`
+				FileSize  int64  `json:"fileSize"`
+			} `json:"extensions"`
+			Links struct {
+				Base     string `json:"base"`
+				Download string `json:"download"`
+			} `json:"_links"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
+	}
+
+	if len(result.Results) == 0 {
+		return nil, apperror.New(apperror.KindServer, "no results returned after upload")
+	}
+
+	r0 := result.Results[0]
+	return &port.Attachment{
+		ID:        r0.ID,
+		Filename:  r0.Title,
+		Size:      r0.Extensions.FileSize,
+		MediaType: r0.Extensions.MediaType,
+		URL:       r0.Links.Base + r0.Links.Download,
+	}, nil
 }
 
 func (c *Client) DownloadAttachment(ctx context.Context, attachmentID string) (io.ReadCloser, error) {

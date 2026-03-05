@@ -9,6 +9,7 @@ import (
 	"github.com/kubot64/conflux/internal/apperror"
 	"github.com/kubot64/conflux/internal/config"
 	"github.com/kubot64/conflux/internal/converter"
+	"github.com/kubot64/conflux/internal/diff"
 	"github.com/kubot64/conflux/internal/validator"
 	"github.com/spf13/cobra"
 )
@@ -442,6 +443,88 @@ func extractTitleFromMarkdown(markdown string) string {
 	return ""
 }
 
+var (
+	pageUpdateDryRun bool
+)
+
+var pageUpdateCmd = &cobra.Command{
+	Use:   "update <ID> [file]",
+	Short: "ページを更新する",
+	Args:  cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		id := args[0]
+		if err := validator.PageID(id); err != nil {
+			return apperror.New(apperror.KindValidation, err.Error())
+		}
+
+		markdown, err := readMarkdownInput(args[1:])
+		if err != nil {
+			return err
+		}
+
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		if err := validateCredentials(cfg); err != nil {
+			return err
+		}
+
+		conv := converter.New()
+		storageBody, err := conv.MarkdownToStorage(markdown)
+		if err != nil {
+			return apperror.New(apperror.KindValidation, fmt.Sprintf("markdown convert: %v", err))
+		}
+
+		c := newClient(cfg)
+		w := newWriter()
+
+		// 現在のページ情報を取得して、バージョンとタイトルを確認
+		existing, err := c.GetPage(cmd.Context(), id)
+		if err != nil {
+			return err
+		}
+
+		type updateResult struct {
+			Action       string `json:"action"`
+			ID           string `json:"id"`
+			Title        string `json:"title"`
+			VersionAfter int    `json:"version_after,omitempty"`
+			Diff         string `json:"diff,omitempty"`
+			URL          string `json:"url,omitempty"`
+		}
+
+		if pageUpdateDryRun {
+			currentMD, _ := conv.StorageToMarkdown(existing.StorageBody)
+			udiff := diff.Unified(currentMD, markdown, "current", "new")
+			return w.Write("page update", updateResult{
+				Action: "would_update",
+				ID:     id,
+				Title:  existing.Title,
+				Diff:   udiff,
+			})
+		}
+
+		updated, err := c.UpdatePage(cmd.Context(), id, existing.Version+1, existing.Title, storageBody)
+		if err != nil {
+			return err
+		}
+
+		r := updateResult{
+			Action:       "updated",
+			ID:           updated.ID,
+			Title:        updated.Title,
+			VersionAfter: updated.Version,
+			URL:          updated.URL,
+		}
+		if jsonFlag {
+			return w.Write("page update", r)
+		}
+		fmt.Printf("Updated: %s (%s) v%d\n", updated.Title, updated.ID, updated.Version)
+		return nil
+	},
+}
+
 func init() {
 	pageSearchCmd.Flags().StringVar(&pageSearchSpaceFlag, "space", "", "スペースキー（省略時: デフォルトスペース or 全スペース）")
 	pageSearchCmd.Flags().StringVar(&pageSearchAfterFlag, "after", "", "この日付以降で絞り込む（YYYY-MM-DD）")
@@ -461,6 +544,9 @@ func init() {
 	pageCreateCmd.Flags().BoolVar(&pageCreateDryRun, "dry-run", false, "実際には作成しない")
 	pageCreateCmd.Flags().StringVar(&pageCreateIfExistsFlag, "if-exists", "error", "既存ページがある場合の動作 (skip|error|update)")
 	pageCmd.AddCommand(pageCreateCmd)
+
+	pageUpdateCmd.Flags().BoolVar(&pageUpdateDryRun, "dry-run", false, "実際には更新せず差分を表示する")
+	pageCmd.AddCommand(pageUpdateCmd)
 
 	rootCmd.AddCommand(pageCmd)
 }

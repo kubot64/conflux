@@ -282,6 +282,71 @@ conflux page get $(conflux alias get home --json | jq -r '.result.target')
 
 ---
 
+## Phase 3: Edit & Management Commands
+
+### `page create`
+
+```bash
+conflux page create [file] --space SPACE [--title TITLE] [--if-exists skip|error|update] [--dry-run] [--json]
+```
+
+- `file` — path to Markdown file; if omitted, reads from **stdin**
+- `--title` — required if Markdown has no `# Heading`
+- `--if-exists` — behavior when a page with the same title exists in the space:
+    - `skip` (default): do nothing, exit 0
+    - `error`: exit 5
+    - `update`: perform `page update` on the existing page
+- `--dry-run` — preview conversion and idempotency check without uploading
+
+JSON `result`: `{action: "created"|"skipped"|"updated", id, title, space, version_after, url}`
+
+---
+
+### `page update`
+
+```bash
+conflux page update <page-ID> [file] [--dry-run] [--json]
+```
+
+- `file` — path to Markdown file; if omitted, reads from **stdin**
+- `--dry-run` — preview storage format diff without uploading
+
+JSON `result`: `{action: "updated"|"preview", id, title, version_after, diff, url}`
+
+---
+
+### `attachment upload`
+
+```bash
+conflux attachment upload <page-ID> <file> [--json]
+```
+
+JSON `result`: `{id, filename, size, url}`
+
+---
+
+### `attachment download`
+
+```bash
+conflux attachment download <attachment-ID> [--output PATH]
+```
+
+- `--output` — destination file path; use `-` for **stdout**
+
+---
+
+### `history list`
+
+```bash
+conflux history list [--limit N] [--space SPACE] [--session UUID] [--json]
+```
+
+- Displays local history of created/updated/uploaded actions from `~/.confluence-cli/history.json`.
+
+JSON `result`: array of `{timestamp, session_id, action, page_id, title, space, version_before, version_after}`
+
+---
+
 <!-- BEGIN BEADS INTEGRATION -->
 ## Issue Tracking with bd (beads)
 
