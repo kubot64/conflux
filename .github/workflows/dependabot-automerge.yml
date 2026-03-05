@@ -1,25 +1,30 @@
 name: Dependabot Auto Merge
 
 on:
-  pull_request_target:
+  pull_request:
+    branches:
+      - main
     types:
       - opened
       - synchronize
       - reopened
 
 permissions:
-  contents: write
   pull-requests: write
 
 jobs:
   automerge:
     name: Auto-merge minor/patch updates
-    if: github.actor == 'dependabot[bot]'
+    if: |
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/')
     runs-on: ubuntu-latest
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
-        uses: dependabot/fetch-metadata@v2
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
