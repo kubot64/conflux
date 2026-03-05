@@ -20,11 +20,12 @@ func (m *MockSpaceClient) ListSpaces(ctx context.Context) ([]port.Space, error) 
 
 // MockPageClient はテスト用 PageClient モック。
 type MockPageClient struct {
-	GetPageFn      func(ctx context.Context, id string) (*port.Page, error)
-	SearchPagesFn  func(ctx context.Context, keyword, space, after string) ([]port.PageSearchResult, error)
-	GetPageTreeFn  func(ctx context.Context, space string, depth int) ([]port.PageTreeNode, error)
-	CreatePageFn   func(ctx context.Context, space, title, storageBody string) (*port.Page, error)
-	UpdatePageFn   func(ctx context.Context, id string, version int, title, storageBody string) (*port.Page, error)
+	GetPageFn           func(ctx context.Context, id string) (*port.Page, error)
+	SearchPagesFn       func(ctx context.Context, keyword, space, after string) ([]port.PageSearchResult, error)
+	FindPagesByTitleFn  func(ctx context.Context, space, title string) ([]port.PageSearchResult, error)
+	GetPageTreeFn       func(ctx context.Context, space string, depth int) ([]port.PageTreeNode, error)
+	CreatePageFn        func(ctx context.Context, space, title, storageBody string) (*port.Page, error)
+	UpdatePageFn        func(ctx context.Context, id string, version int, title, storageBody string) (*port.Page, error)
 }
 
 func (m *MockPageClient) GetPage(ctx context.Context, id string) (*port.Page, error) {
@@ -32,6 +33,9 @@ func (m *MockPageClient) GetPage(ctx context.Context, id string) (*port.Page, er
 }
 func (m *MockPageClient) SearchPages(ctx context.Context, keyword, space, after string) ([]port.PageSearchResult, error) {
 	return m.SearchPagesFn(ctx, keyword, space, after)
+}
+func (m *MockPageClient) FindPagesByTitle(ctx context.Context, space, title string) ([]port.PageSearchResult, error) {
+	return m.FindPagesByTitleFn(ctx, space, title)
 }
 func (m *MockPageClient) GetPageTree(ctx context.Context, space string, depth int) ([]port.PageTreeNode, error) {
 	return m.GetPageTreeFn(ctx, space, depth)

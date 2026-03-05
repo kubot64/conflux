@@ -49,6 +49,7 @@ type PageTreeNode struct {
 type PageClient interface {
 	GetPage(ctx context.Context, id string) (*Page, error)
 	SearchPages(ctx context.Context, keyword, space, after string) ([]PageSearchResult, error)
+	FindPagesByTitle(ctx context.Context, space, title string) ([]PageSearchResult, error)
 	GetPageTree(ctx context.Context, space string, depth int) ([]PageTreeNode, error)
 	CreatePage(ctx context.Context, space, title, storageBody string) (*Page, error)
 	UpdatePage(ctx context.Context, id string, version int, title, storageBody string) (*Page, error)

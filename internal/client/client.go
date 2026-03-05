@@ -317,6 +317,37 @@ func (c *Client) SearchPages(ctx context.Context, keyword, space, after string) 
 	return pages, nil
 }
 
+func (c *Client) FindPagesByTitle(ctx context.Context, space, title string) ([]port.PageSearchResult, error) {
+	escaped := strings.ReplaceAll(title, `"`, `\"`)
+	cql := fmt.Sprintf(`type=page AND space="%s" AND title="%s"`, space, escaped)
+	path := fmt.Sprintf("/rest/api/content/search?cql=%s&expand=history.lastUpdated,space&limit=10", urlEncode(cql))
+	req, err := c.newReq(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do(req, false)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result searchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
+	}
+	pages := make([]port.PageSearchResult, len(result.Results))
+	for i, r := range result.Results {
+		pages[i] = port.PageSearchResult{
+			ID:           r.ID,
+			Title:        r.Title,
+			Space:        r.Space.Key,
+			LastModified: r.History.LastUpdated.When,
+			URL:          r.Links.Base + r.Links.WebUI,
+		}
+	}
+	return pages, nil
+}
+
 func (c *Client) GetPageTree(ctx context.Context, space string, depth int) ([]port.PageTreeNode, error) {
 	// ルートページを取得してから再帰的に子ページを取得する実装（フェーズ2で詳細実装）
 	path := fmt.Sprintf("/rest/api/content?spaceKey=%s&type=page&expand=ancestors&limit=200", space)
