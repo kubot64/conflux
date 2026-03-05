@@ -8,7 +8,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
-	"github.com/yuin/goldmark/renderer/html"
 )
 
 // Converter は port.Converter を実装する。
@@ -22,9 +21,6 @@ func New() *Converter {
 		goldmark.WithExtensions(
 			extension.GFM,
 			extension.Table,
-		),
-		goldmark.WithRendererOptions(
-			html.WithUnsafe(),
 		),
 	)
 	return &Converter{md: md}

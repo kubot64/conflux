@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/kubot64/conflux/internal/apperror"
+	"github.com/kubot64/conflux/internal/fileutil"
 	"github.com/kubot64/conflux/internal/port"
 )
 
@@ -48,11 +49,7 @@ func (s *Store) save(records []aliasRecord) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return fileutil.AtomicWrite(s.path, data, 0600)
 }
 
 // Set はエイリアスを追加または更新する。

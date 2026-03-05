@@ -9,7 +9,6 @@ import (
 
 	"github.com/kubot64/conflux/internal/apperror"
 	"github.com/kubot64/conflux/internal/config"
-	"github.com/kubot64/conflux/internal/history"
 	"github.com/kubot64/conflux/internal/port"
 	"github.com/kubot64/conflux/internal/validator"
 	"github.com/spf13/cobra"
@@ -98,7 +97,7 @@ var attachmentUploadCmd = &cobra.Command{
 		}
 
 		// 履歴の記録
-		logger, _ := history.NewLogger(cliHomeDir())
+		logger, _ := newHistoryLogger()
 		if logger != nil {
 			_ = logger.Log(port.HistoryEntry{
 				Timestamp: time.Now(),

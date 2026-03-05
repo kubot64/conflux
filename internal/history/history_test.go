@@ -3,6 +3,7 @@ package history_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,13 +121,76 @@ func TestLog_Max1000(t *testing.T) {
 	}
 }
 
-func TestLog_Atomic(t *testing.T) {
+func TestLog_RedactTitle(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := history.NewLogger(dir, history.WithRedactTitle(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entry := port.HistoryEntry{
+		SessionID: "s1",
+		Action:    "updated",
+		PageID:    "123",
+		Title:     "秘密のページ",
+		Space:     "DEV",
+	}
+	if err := logger.Log(entry); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := logger.List("", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	// タイトルが元の値ではなくハッシュになっていること
+	if entries[0].Title == "秘密のページ" {
+		t.Error("title should be redacted, but got original value")
+	}
+	// ハッシュは sha256: プレフィックス付き
+	if !strings.HasPrefix(entries[0].Title, "sha256:") {
+		t.Errorf("expected sha256: prefix, got: %s", entries[0].Title)
+	}
+}
+
+func TestLog_NoRedactByDefault(t *testing.T) {
+	logger, _ := newLogger(t)
+
+	entry := port.HistoryEntry{
+		SessionID: "s1",
+		Action:    "updated",
+		PageID:    "123",
+		Title:     "公開ページ",
+		Space:     "DEV",
+	}
+	if err := logger.Log(entry); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := logger.List("", "", 0)
+	if entries[0].Title != "公開ページ" {
+		t.Errorf("expected original title, got: %s", entries[0].Title)
+	}
+}
+
+func TestLog_Atomic_NoPredictableTmp(t *testing.T) {
 	logger, dir := newLogger(t)
 	_ = logger.Log(port.HistoryEntry{SessionID: "s", Action: "created", PageID: "1", Space: "DEV"})
 
-	// 一時ファイルが残っていないことを確認
+	// predictable な一時ファイルが残っていないこと
 	tmpPath := filepath.Join(dir, ".history.json.tmp")
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
-		t.Error("tmp file should not exist after successful write")
+		t.Error("predictable tmp file should not exist")
+	}
+
+	// ランダム名の一時ファイルも残っていないこと
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() != "history.json" {
+			t.Errorf("unexpected file in dir: %s", e.Name())
+		}
 	}
 }

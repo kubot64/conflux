@@ -1,11 +1,14 @@
 package history
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/kubot64/conflux/internal/fileutil"
 	"github.com/kubot64/conflux/internal/port"
 )
 
@@ -13,15 +16,30 @@ const maxEntries = 1000
 
 // Logger は port.HistoryLogger を実装する。
 type Logger struct {
-	dir string
+	dir         string
+	redactTitle bool
+}
+
+// Option は Logger のオプション関数型。
+type Option func(*Logger)
+
+// WithRedactTitle はタイトルを SHA-256 ハッシュで置換するオプション。
+func WithRedactTitle(v bool) Option {
+	return func(l *Logger) {
+		l.redactTitle = v
+	}
 }
 
 // NewLogger は指定ディレクトリに history.json を管理する Logger を生成する。
-func NewLogger(dir string) (*Logger, error) {
+func NewLogger(dir string, opts ...Option) (*Logger, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	return &Logger{dir: dir}, nil
+	l := &Logger{dir: dir}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l, nil
 }
 
 type historyFile struct {
@@ -39,8 +57,7 @@ type historyEntry struct {
 	VersionAfter  int       `json:"version_after,omitempty"`
 }
 
-func (l *Logger) path() string    { return filepath.Join(l.dir, "history.json") }
-func (l *Logger) tmpPath() string { return filepath.Join(l.dir, ".history.json.tmp") }
+func (l *Logger) path() string { return filepath.Join(l.dir, "history.json") }
 
 func (l *Logger) load() (*historyFile, error) {
 	data, err := os.ReadFile(l.path())
@@ -68,11 +85,7 @@ func (l *Logger) save(hf *historyFile) error {
 		return err
 	}
 
-	// アトミック書き込み: temp ファイルに書き出してから rename
-	if err := os.WriteFile(l.tmpPath(), data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(l.tmpPath(), l.path())
+	return fileutil.AtomicWrite(l.path(), data, 0600)
 }
 
 // Log はエントリを history.json に記録する。
@@ -82,12 +95,18 @@ func (l *Logger) Log(entry port.HistoryEntry) error {
 		return err
 	}
 
+	title := entry.Title
+	if l.redactTitle && title != "" {
+		h := sha256.Sum256([]byte(title))
+		title = fmt.Sprintf("sha256:%x", h[:8])
+	}
+
 	hf.Entries = append(hf.Entries, historyEntry{
 		Timestamp:     entry.Timestamp,
 		SessionID:     entry.SessionID,
 		Action:        entry.Action,
 		PageID:        entry.PageID,
-		Title:         entry.Title,
+		Title:         title,
 		Space:         entry.Space,
 		VersionBefore: entry.VersionBefore,
 		VersionAfter:  entry.VersionAfter,

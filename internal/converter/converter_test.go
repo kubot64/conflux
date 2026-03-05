@@ -128,6 +128,49 @@ func TestStorageToMarkdown_MacroPreserved(t *testing.T) {
 	}
 }
 
+// --- XSS 対策: raw HTML はエスケープされる ---
+
+func TestMarkdownToStorage_RawHTML_Escaped(t *testing.T) {
+	c := newConverter()
+	// raw HTML (script タグ) がそのまま出力されないこと
+	md := `Hello <script>alert("xss")</script> world`
+	out, err := c.MarkdownToStorage(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "<script>") {
+		t.Errorf("raw <script> tag should be escaped, got: %s", out)
+	}
+	// テキスト部分は保持される
+	if !strings.Contains(out, "Hello") || !strings.Contains(out, "world") {
+		t.Errorf("expected text preserved, got: %s", out)
+	}
+}
+
+func TestMarkdownToStorage_RawHTML_ImgOnError_Escaped(t *testing.T) {
+	c := newConverter()
+	md := `<img src=x onerror=alert(1)>`
+	out, err := c.MarkdownToStorage(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "onerror") {
+		t.Errorf("onerror attribute should be escaped, got: %s", out)
+	}
+}
+
+func TestMarkdownToStorage_RawHTML_Iframe_Escaped(t *testing.T) {
+	c := newConverter()
+	md := `<iframe src="https://evil.com"></iframe>`
+	out, err := c.MarkdownToStorage(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "<iframe") {
+		t.Errorf("iframe tag should be escaped, got: %s", out)
+	}
+}
+
 // --- ExtractSection ---
 
 func TestExtractSection_ByHeading(t *testing.T) {

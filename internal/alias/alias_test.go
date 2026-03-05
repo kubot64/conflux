@@ -1,6 +1,7 @@
 package alias_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -124,6 +125,27 @@ func TestDelete_NotFound(t *testing.T) {
 	}
 	if e, ok := err.(*apperror.AppError); !ok || e.Kind != apperror.KindNotFound {
 		t.Errorf("expected KindNotFound error, got %v", err)
+	}
+}
+
+func TestSave_NoPredictableTmpFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "alias.json")
+
+	store, _ := alias.NewStore(path)
+	if err := store.Set("a", "111", port.AliasPage); err != nil {
+		t.Fatal(err)
+	}
+
+	// predictable な .tmp ファイルが残っていないこと
+	tmpPath := path + ".tmp"
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Error("predictable .tmp file should not exist")
+	}
+
+	// alias.json は存在する
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("alias.json should exist: %v", err)
 	}
 }
 

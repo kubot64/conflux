@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"github.com/kubot64/conflux/internal/history"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +19,7 @@ var historyListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "更新履歴を表示する",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logger, err := history.NewLogger(cliHomeDir())
+		logger, err := newHistoryLogger()
 		if err != nil {
 			return err
 		}

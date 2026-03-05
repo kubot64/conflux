@@ -233,6 +233,45 @@ func TestGetPage(t *testing.T) {
 
 // --- GetPage 404 ---
 
+// --- TLS 設定の強化 ---
+
+func TestNew_TLSMinVersion(t *testing.T) {
+	// insecure=false の場合、TLS 1.2 未満は拒否される
+	c := client.New("https://localhost:1", "token", false)
+	tr := client.GetTransport(c)
+	if tr == nil {
+		t.Fatal("expected explicit Transport, got nil")
+	}
+	if tr.TLSClientConfig == nil {
+		t.Fatal("expected TLSClientConfig, got nil")
+	}
+	// crypto/tls.VersionTLS12 = 0x0303
+	if tr.TLSClientConfig.MinVersion != 0x0303 {
+		t.Errorf("expected MinVersion TLS 1.2 (0x0303), got 0x%04x", tr.TLSClientConfig.MinVersion)
+	}
+	if tr.TLSClientConfig.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify should be false when insecure=false")
+	}
+}
+
+func TestNew_InsecureMode(t *testing.T) {
+	c := client.New("https://localhost:1", "token", true)
+	tr := client.GetTransport(c)
+	if tr == nil {
+		t.Fatal("expected explicit Transport, got nil")
+	}
+	if tr.TLSClientConfig == nil {
+		t.Fatal("expected TLSClientConfig, got nil")
+	}
+	if !tr.TLSClientConfig.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify should be true when insecure=true")
+	}
+	// insecure=true でも TLS 1.2 最低は維持
+	if tr.TLSClientConfig.MinVersion != 0x0303 {
+		t.Errorf("expected MinVersion TLS 1.2 even in insecure mode, got 0x%04x", tr.TLSClientConfig.MinVersion)
+	}
+}
+
 func TestGetPage_NotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

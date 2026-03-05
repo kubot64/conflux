@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,7 +39,14 @@ func New(baseURL, token string, insecure bool) *Client {
 		token:     token,
 		userAgent: "conflux/1.0.0", // TODO: バージョン情報を cmd から渡せるようにする
 	}
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: insecure,
+		},
+	}
 	c.httpClient = &http.Client{
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("too many redirects")
