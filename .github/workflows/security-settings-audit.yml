@@ -8,6 +8,7 @@ on:
 permissions:
   contents: read
   administration: read
+  security-events: read
 
 jobs:
   audit:
@@ -30,6 +31,21 @@ jobs:
 
             if (analysis.secret_scanning_push_protection?.status !== "enabled") {
               failures.push("secret_scanning_push_protection is not enabled");
+            }
+
+            if (analysis.dependabot_security_updates?.status !== "enabled") {
+              failures.push("dependabot_security_updates is not enabled");
+            }
+
+            try {
+              await github.request(
+                "GET /repos/{owner}/{repo}/vulnerability-alerts",
+                { owner, repo, mediaType: { previews: ["dorian"] } }
+              );
+            } catch (error) {
+              failures.push(
+                `dependabot alerts are not enabled: ${error.message}`
+              );
             }
 
             let privateVulnEnabled = false;
