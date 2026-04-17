@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -176,7 +176,7 @@ func jitterBackoff(attempt int) time.Duration {
 	if exp > backoffMax {
 		exp = backoffMax
 	}
-	jitter := time.Duration(rand.Int63n(int64(exp / 2)))
+	jitter := time.Duration(rand.Int64N(int64(exp / 2)))
 	return exp + jitter
 }
 
