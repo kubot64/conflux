@@ -156,8 +156,38 @@ func TestLog_RedactTitle(t *testing.T) {
 	}
 }
 
-func TestLog_NoRedactByDefault(t *testing.T) {
+func TestLog_RedactByDefault(t *testing.T) {
+	// セキュリティのデフォルト: タイトルは sha256 ハッシュに置換される。
+	// 平文での記録は明示的に WithRedactTitle(false) を指定した場合のみ。
 	logger, _ := newLogger(t)
+
+	entry := port.HistoryEntry{
+		SessionID: "s1",
+		Action:    "updated",
+		PageID:    "123",
+		Title:     "機密ページ",
+		Space:     "DEV",
+	}
+	if err := logger.Log(entry); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := logger.List("", "", 0)
+	if entries[0].Title == "機密ページ" {
+		t.Errorf("title must be redacted by default, got plaintext: %s", entries[0].Title)
+	}
+	if !strings.HasPrefix(entries[0].Title, "sha256:") {
+		t.Errorf("expected sha256: prefix, got: %s", entries[0].Title)
+	}
+}
+
+func TestLog_RedactCanBeDisabled(t *testing.T) {
+	// 明示的に WithRedactTitle(false) を渡せば平文で保存される。
+	dir := t.TempDir()
+	logger, err := history.NewLogger(dir, history.WithRedactTitle(false))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	entry := port.HistoryEntry{
 		SessionID: "s1",
@@ -172,7 +202,7 @@ func TestLog_NoRedactByDefault(t *testing.T) {
 
 	entries, _ := logger.List("", "", 0)
 	if entries[0].Title != "公開ページ" {
-		t.Errorf("expected original title, got: %s", entries[0].Title)
+		t.Errorf("expected original title with redact disabled, got: %s", entries[0].Title)
 	}
 }
 
