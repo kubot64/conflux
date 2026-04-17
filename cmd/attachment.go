@@ -181,11 +181,19 @@ var attachmentDownloadCmd = &cobra.Command{
 		if destFilename == "-" {
 			out = os.Stdout
 		} else {
-			f, err := os.Create(destFilename)
+			// 添付内容は機密の可能性があるため、umask 依存の 0666 ではなく
+			// 所有者のみ読み書き可能 (0600) を明示する。
+			f, err := os.OpenFile(destFilename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 			if err != nil {
 				return apperror.New(apperror.KindServer, fmt.Sprintf("create file: %v", err))
 			}
 			defer f.Close()
+			// OpenFile のモードはファイル新規作成時のみ適用される。既存ファイルへ
+			// 上書きするケースで過去に緩いパーミッションが付いていた場合に備え、
+			// 明示的に 0600 へ chmod する。
+			if err := f.Chmod(0o600); err != nil {
+				return apperror.New(apperror.KindServer, fmt.Sprintf("chmod file: %v", err))
+			}
 			out = f
 		}
 
