@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   automerge:
-    name: Auto-merge minor/patch updates
+    name: Auto-merge patch updates
     if: |
       github.actor == 'dependabot[bot]' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
@@ -29,11 +29,10 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Enable auto-merge for minor/patch
+      - name: Enable auto-merge for patch
         if: |
           github.event.pull_request.base.ref == 'main' &&
-          (steps.metadata.outputs.update-type == 'version-update:semver-minor' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-patch')
+          steps.metadata.outputs.update-type == 'version-update:semver-patch'
         run: gh pr merge --auto --merge --repo "${{ github.repository }}" "${{ github.event.pull_request.number }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
