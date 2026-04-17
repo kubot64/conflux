@@ -291,6 +291,9 @@ var pageCreateCmd = &cobra.Command{
 		if title == "" {
 			return apperror.New(apperror.KindValidation, "title required: use --title or add '# Heading' to the file")
 		}
+		if err := validator.Title(title); err != nil {
+			return apperror.New(apperror.KindValidation, err.Error())
+		}
 
 		cfg, err := config.Load()
 		if err != nil {
