@@ -60,6 +60,7 @@ cp -rf source dest          # NOT: cp -r source dest
 | `CONFLUENCE_CLI_LOG` | No | Debug log file path. Omit to disable logging |
 | `CONFLUENCE_CLI_TIMEOUT` | No | Command-wide timeout (e.g. `30s`, `2m`). Default: `30s`. Overrideable with `--timeout` flag |
 | `CONFLUENCE_CLI_HOME` | No | Override `~/.confluence-cli/` directory |
+| `CONFLUENCE_CLI_REDACT_HISTORY` | No | Page title redaction in `history.json`. Default: enabled (titles stored as `sha256:...`). Set to `0` to store plaintext titles |
 
 ### Exit Codes
 

@@ -23,7 +23,8 @@ type Logger struct {
 // Option は Logger のオプション関数型。
 type Option func(*Logger)
 
-// WithRedactTitle はタイトルを SHA-256 ハッシュで置換するオプション。
+// WithRedactTitle はタイトル redaction の有効/無効を切り替える。
+// デフォルトは有効（SHA-256 ハッシュに置換）。明示的に false を渡すと平文で保存。
 func WithRedactTitle(v bool) Option {
 	return func(l *Logger) {
 		l.redactTitle = v
@@ -31,11 +32,12 @@ func WithRedactTitle(v bool) Option {
 }
 
 // NewLogger は指定ディレクトリに history.json を管理する Logger を生成する。
+// デフォルトでタイトルは redaction される（情報漏洩リスクの最小化）。
 func NewLogger(dir string, opts ...Option) (*Logger, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	l := &Logger{dir: dir}
+	l := &Logger{dir: dir, redactTitle: true}
 	for _, opt := range opts {
 		opt(l)
 	}
