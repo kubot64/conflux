@@ -128,6 +128,51 @@ func TestStorageToMarkdown_MacroPreserved(t *testing.T) {
 	}
 }
 
+// 悪意のある Confluence ページが script タグ入りの疑似マクロを返した場合、
+// 生の <script> タグが出力マークダウンに残ってはならない。
+func TestStorageToMarkdown_Macro_StripsScriptTag(t *testing.T) {
+	c := newConverter()
+	macro := `<ac:structured-macro ac:name="info"><ac:rich-text-body><script>alert(1)</script></ac:rich-text-body></ac:structured-macro>`
+	out, err := c.StorageToMarkdown(macro)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "<script>") || strings.Contains(strings.ToLower(out), "<script") {
+		t.Errorf("sanitized macro must not contain <script>, got: %s", out)
+	}
+}
+
+// HTML コメント中で "--" が現れるとコメント終端 "-->" を偽装してブレークアウト
+// できるため、マクロ内容の "--" は無害化されなければならない。
+func TestStorageToMarkdown_Macro_NeutralizesCommentBreakout(t *testing.T) {
+	c := newConverter()
+	macro := `<ac:structured-macro ac:name="x">payload --> <script>alert(1)</script></ac:structured-macro>`
+	out, err := c.StorageToMarkdown(macro)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// --> を含む文字列がマクロコメント内に残ってはならない
+	if strings.Contains(out, "-->") {
+		// 最後の1件（自前のコメント終端）は許容されるため、
+		// 終端以外に "-->" が存在する場合のみエラー
+		if strings.Count(out, "-->") > 1 {
+			t.Errorf("macro content must not introduce '-->' sequence, got: %s", out)
+		}
+	}
+}
+
+func TestStorageToMarkdown_Macro_StripsOnErrorAttribute(t *testing.T) {
+	c := newConverter()
+	macro := `<ac:structured-macro ac:name="info"><ac:rich-text-body><img src=x onerror="alert(1)"></ac:rich-text-body></ac:structured-macro>`
+	out, err := c.StorageToMarkdown(macro)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(out), "onerror") {
+		t.Errorf("sanitized macro must not retain onerror attribute, got: %s", out)
+	}
+}
+
 // --- XSS 対策: raw HTML はエスケープされる ---
 
 func TestMarkdownToStorage_RawHTML_Escaped(t *testing.T) {
