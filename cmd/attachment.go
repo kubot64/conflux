@@ -188,6 +188,12 @@ var attachmentDownloadCmd = &cobra.Command{
 				return apperror.New(apperror.KindServer, fmt.Sprintf("create file: %v", err))
 			}
 			defer f.Close()
+			// OpenFile のモードはファイル新規作成時のみ適用される。既存ファイルへ
+			// 上書きするケースで過去に緩いパーミッションが付いていた場合に備え、
+			// 明示的に 0600 へ chmod する。
+			if err := f.Chmod(0o600); err != nil {
+				return apperror.New(apperror.KindServer, fmt.Sprintf("chmod file: %v", err))
+			}
 			out = f
 		}
 

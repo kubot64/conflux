@@ -186,6 +186,35 @@ func TestAttachmentDownload(t *testing.T) {
 		}
 	})
 
+	t.Run("download_overwrites_existing_with_owner_only_mode", func(t *testing.T) {
+		// 既存ファイル（緩いパーミッション）に上書きした場合も 0600 へ
+		// chmod されること。OpenFile のモード引数は新規作成時しか効かない。
+		if runtime.GOOS == "windows" {
+			t.Skip("POSIX file modes are not meaningful on Windows")
+		}
+		srv := httptest.NewServer(attachmentAPIHandler(t))
+		defer srv.Close()
+
+		outFile := filepath.Join(t.TempDir(), "preexisting.bin")
+		if err := os.WriteFile(outFile, []byte("old"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		cmd := exec.Command(bin, "attachment", "download", "--output", outFile, "att-001")
+		cmd.Env = testEnv(srv.URL)
+		if out, err := cmd.Output(); err != nil {
+			t.Fatalf("expected exit 0: %v\nstdout: %s", err, out)
+		}
+
+		info, err := os.Stat(outFile)
+		if err != nil {
+			t.Fatalf("stat output: %v", err)
+		}
+		if mode := info.Mode().Perm(); mode&0o077 != 0 {
+			t.Errorf("overwritten file must be owner-only after download, got mode %#o", mode)
+		}
+	})
+
 	t.Run("download_stdin_flag_writes_only_content", func(t *testing.T) {
 		// --output - の場合、ファイル内容のみが stdout に出力される（メッセージなし）
 		srv := httptest.NewServer(attachmentAPIHandler(t))
