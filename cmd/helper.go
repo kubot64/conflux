@@ -17,10 +17,12 @@ func newClient(cfg *config.Config) *client.Client {
 }
 
 // newHistoryLogger は CONFLUENCE_CLI_REDACT_HISTORY を反映した Logger を生成する。
+// デフォルトでタイトルは redaction される（セキュリティの安全側に倒す）。
+// 平文で保存したい場合は CONFLUENCE_CLI_REDACT_HISTORY=0 を明示する。
 func newHistoryLogger() (*history.Logger, error) {
 	var opts []history.Option
-	if os.Getenv("CONFLUENCE_CLI_REDACT_HISTORY") == "1" {
-		opts = append(opts, history.WithRedactTitle(true))
+	if os.Getenv("CONFLUENCE_CLI_REDACT_HISTORY") == "0" {
+		opts = append(opts, history.WithRedactTitle(false))
 	}
 	return history.NewLogger(cliHomeDir(), opts...)
 }
