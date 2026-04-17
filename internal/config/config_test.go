@@ -1,6 +1,10 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,5 +61,68 @@ func TestLoad_InvalidTimeout(t *testing.T) {
 	_, err := config.Load()
 	if err == nil {
 		t.Fatal("expected error for invalid timeout, got nil")
+	}
+}
+
+func TestLoad_TokenFile_Mode0600_OK(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not meaningful on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte("secret-token\n"), 0600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	t.Setenv("CONFLUENCE_TOKEN", "")
+	t.Setenv("CONFLUENCE_TOKEN_FILE", path)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Token != "secret-token" {
+		t.Errorf("Token: got %q, want %q", cfg.Token, "secret-token")
+	}
+}
+
+func TestLoad_TokenFile_WorldReadable_Rejected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not meaningful on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte("secret-token"), 0644); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	t.Setenv("CONFLUENCE_TOKEN", "")
+	t.Setenv("CONFLUENCE_TOKEN_FILE", path)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("expected error for world-readable token file, got nil")
+	}
+	if !strings.Contains(err.Error(), "permission") {
+		t.Errorf("error should mention permissions, got: %v", err)
+	}
+}
+
+func TestLoad_TokenFile_GroupReadable_Rejected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not meaningful on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte("secret-token"), 0640); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	t.Setenv("CONFLUENCE_TOKEN", "")
+	t.Setenv("CONFLUENCE_TOKEN_FILE", path)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("expected error for group-readable token file, got nil")
 	}
 }
