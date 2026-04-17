@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -156,6 +157,32 @@ func TestAttachmentDownload(t *testing.T) {
 		}
 		if string(data) != fileContent {
 			t.Errorf("file content: got %q, want %q", string(data), fileContent)
+		}
+	})
+
+	t.Run("download_file_mode_is_owner_only", func(t *testing.T) {
+		// ダウンロードした添付ファイルは umask 依存ではなく
+		// 0600（所有者のみ読み書き）で書き込まれること。
+		if runtime.GOOS == "windows" {
+			t.Skip("POSIX file modes are not meaningful on Windows")
+		}
+		srv := httptest.NewServer(attachmentAPIHandler(t))
+		defer srv.Close()
+
+		outFile := filepath.Join(t.TempDir(), "secret.bin")
+		cmd := exec.Command(bin, "attachment", "download", "--output", outFile, "att-001")
+		cmd.Env = testEnv(srv.URL)
+
+		if out, err := cmd.Output(); err != nil {
+			t.Fatalf("expected exit 0: %v\nstdout: %s", err, out)
+		}
+
+		info, err := os.Stat(outFile)
+		if err != nil {
+			t.Fatalf("stat output: %v", err)
+		}
+		if mode := info.Mode().Perm(); mode&0o077 != 0 {
+			t.Errorf("downloaded file must not be group/world accessible, got mode %#o", mode)
 		}
 	})
 

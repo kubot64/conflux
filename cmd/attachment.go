@@ -181,7 +181,9 @@ var attachmentDownloadCmd = &cobra.Command{
 		if destFilename == "-" {
 			out = os.Stdout
 		} else {
-			f, err := os.Create(destFilename)
+			// 添付内容は機密の可能性があるため、umask 依存の 0666 ではなく
+			// 所有者のみ読み書き可能 (0600) を明示する。
+			f, err := os.OpenFile(destFilename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 			if err != nil {
 				return apperror.New(apperror.KindServer, fmt.Sprintf("create file: %v", err))
 			}
