@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kubot64/conflux/internal/client"
 )
@@ -252,6 +253,48 @@ func TestNew_TLSMinVersion(t *testing.T) {
 	}
 	if tr.TLSClientConfig.InsecureSkipVerify {
 		t.Error("InsecureSkipVerify should be false when insecure=false")
+	}
+}
+
+func TestNew_TransportTimeouts(t *testing.T) {
+	c := client.New("https://localhost:1", "token", false)
+	tr := client.GetTransport(c)
+	if tr == nil {
+		t.Fatal("expected explicit Transport, got nil")
+	}
+	if tr.DialContext == nil {
+		t.Error("DialContext should be set to control dial timeout and keepalive")
+	}
+	if tr.TLSHandshakeTimeout <= 0 {
+		t.Error("TLSHandshakeTimeout should be > 0")
+	}
+	if tr.ResponseHeaderTimeout <= 0 {
+		t.Error("ResponseHeaderTimeout should be > 0")
+	}
+	if tr.IdleConnTimeout <= 0 {
+		t.Error("IdleConnTimeout should be > 0")
+	}
+	if tr.ExpectContinueTimeout <= 0 {
+		t.Error("ExpectContinueTimeout should be > 0")
+	}
+}
+
+// スローレスポンス（ヘッダ送出が ResponseHeaderTimeout を超える）でエラー返す。
+func TestResponseHeaderTimeout_TripsOnSlowHeaders(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow header timeout test in short mode")
+	}
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+	}))
+	defer srv.Close()
+	defer close(block)
+
+	c := client.NewWithResponseHeaderTimeout(srv.URL, "test-token", true, 100*time.Millisecond)
+	_, err := c.ListSpaces(context.Background())
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
 	}
 }
 
