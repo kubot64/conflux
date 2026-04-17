@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"mime/multipart"
 	"net/http"
@@ -98,12 +99,14 @@ func (c *Client) do(req *http.Request, isWrite bool) (*http.Response, error) {
 		// 認証エラーは即終了
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 			resp.Body.Close()
-			return nil, apperror.New(apperror.KindAuth, fmt.Sprintf("authentication failed: %d", resp.StatusCode))
+			slog.Debug("auth failed", "status", resp.StatusCode, "method", req.Method, "path", req.URL.Path)
+			return nil, apperror.New(apperror.KindAuth, "authentication failed")
 		}
 
 		// 404 は即終了（リトライしない）
 		if resp.StatusCode == http.StatusNotFound {
 			resp.Body.Close()
+			slog.Debug("not found", "method", req.Method, "path", req.URL.Path)
 			return nil, apperror.New(apperror.KindNotFound, "resource not found")
 		}
 
@@ -136,9 +139,11 @@ func (c *Client) do(req *http.Request, isWrite bool) (*http.Response, error) {
 
 		// 5xx: GET は再試行、POST/PUT は再試行しない
 		if resp.StatusCode >= 500 {
+			status := resp.StatusCode
 			resp.Body.Close()
 			if isWrite || attempt == maxRetries {
-				return nil, apperror.New(apperror.KindServer, fmt.Sprintf("server error: %d", resp.StatusCode))
+				slog.Debug("server error", "status", status, "method", req.Method, "path", req.URL.Path, "attempt", attempt)
+				return nil, apperror.New(apperror.KindServer, "server error")
 			}
 			wait := jitterBackoff(attempt)
 			select {
@@ -156,8 +161,10 @@ func (c *Client) do(req *http.Request, isWrite bool) (*http.Response, error) {
 		}
 
 		// その他エラー
+		status := resp.StatusCode
 		resp.Body.Close()
-		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("unexpected status: %d", resp.StatusCode))
+		slog.Debug("unexpected response", "status", status, "method", req.Method, "path", req.URL.Path)
+		return nil, apperror.New(apperror.KindServer, "unexpected response from server")
 	}
 	return nil, apperror.New(apperror.KindServer, "max retries exceeded")
 }
