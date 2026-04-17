@@ -6,9 +6,16 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 )
+
+// macroSanitizer はマクロ HTML のタグ・属性をすべて除去するポリシー。
+// Confluence storage の ac:* / ri:* 要素を <!-- macro: ... --> コメントに
+// 書き戻す際、攻撃者制御の script タグやイベントハンドラが下流の
+// Markdown レンダラに漏れないよう防御的に使用する。
+var macroSanitizer = bluemonday.StrictPolicy()
 
 // Converter は port.Converter を実装する。
 type Converter struct {
@@ -103,10 +110,15 @@ func nodeToMarkdown(s *goquery.Selection) string {
 	case "table":
 		return tableToMarkdown(s)
 	default:
-		// Confluence マクロ（ac:structured-macro, ac:image など）はコメントとして保持
+		// Confluence マクロ（ac:structured-macro, ac:image など）はコメントとして保持。
+		// ただし raw HTML を通すと下流レンダラでの XSS の踏み台になるため、
+		// タグ・属性をすべて除去し、"-->" シーケンスも無害化する。
 		if strings.HasPrefix(tag, "ac:") || strings.HasPrefix(tag, "ri:") {
 			html, _ := goquery.OuterHtml(s)
-			return "<!-- macro: " + strings.TrimSpace(html) + " -->\n\n"
+			sanitized := macroSanitizer.Sanitize(html)
+			// HTML コメント終端のブレークアウト防止: "--" を " - " に変換。
+			sanitized = strings.ReplaceAll(sanitized, "--", " - ")
+			return "<!-- macro: " + strings.TrimSpace(sanitized) + " -->\n\n"
 		}
 		// その他はテキストのみ抽出
 		text := strings.TrimSpace(s.Text())
