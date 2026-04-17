@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/kubot64/conflux/internal/client"
@@ -269,6 +270,38 @@ func TestNew_InsecureMode(t *testing.T) {
 	// insecure=true でも TLS 1.2 最低は維持
 	if tr.TLSClientConfig.MinVersion != 0x0303 {
 		t.Errorf("expected MinVersion TLS 1.2 even in insecure mode, got 0x%04x", tr.TLSClientConfig.MinVersion)
+	}
+}
+
+// HTTP ステータスコードや内部ディテールはユーザ向けエラーメッセージに
+// 露出させない。slog 側に逃がしているため、CLI 利用者はエラー Kind と
+// 抽象的な説明だけを受け取る。
+func TestErrorMessage_DoesNotLeakHTTPStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{"server_500", http.StatusInternalServerError},
+		{"server_503", http.StatusServiceUnavailable},
+		{"unexpected_418", http.StatusTeapot},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+
+			c := newTestClient(t, srv)
+			_, err := c.CreatePage(context.Background(), "DEV", "Test", "<p>body</p>")
+			if err == nil {
+				t.Fatalf("expected error for status %d", tt.status)
+			}
+			msg := err.Error()
+			if strings.Contains(msg, fmt.Sprintf("%d", tt.status)) {
+				t.Errorf("error message must not contain status code %d, got: %s", tt.status, msg)
+			}
+		})
 	}
 }
 
