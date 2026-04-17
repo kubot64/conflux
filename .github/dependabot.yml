@@ -8,6 +8,11 @@ updates:
     labels:
       - "dependencies"
       - "security"
+    # Restrict to direct (top-level) dependencies. Indirect/transitive
+    # updates land via the parent direct dep, which keeps the audit
+    # surface small and avoids merging unreviewed transitive code.
+    allow:
+      - dependency-type: "direct"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -17,3 +22,5 @@ updates:
     labels:
       - "dependencies"
       - "security"
+    allow:
+      - dependency-type: "direct"
