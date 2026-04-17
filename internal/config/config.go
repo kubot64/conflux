@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -32,6 +33,9 @@ func Load() (*Config, error) {
 	// Token が空の場合、TokenFile からの読み取りを試みる
 	if cfg.Token == "" {
 		if tokenFile := os.Getenv("CONFLUENCE_TOKEN_FILE"); tokenFile != "" {
+			if err := checkTokenFilePermissions(tokenFile); err != nil {
+				return nil, err
+			}
 			data, err := os.ReadFile(tokenFile)
 			if err != nil {
 				return nil, fmt.Errorf("read CONFLUENCE_TOKEN_FILE: %w", err)
@@ -53,6 +57,22 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// checkTokenFilePermissions は CONFLUENCE_TOKEN_FILE が所有者のみ読み書き可能
+// (0600 以下) であることを検証する。POSIX 以外ではスキップする。
+func checkTokenFilePermissions(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat CONFLUENCE_TOKEN_FILE: %w", err)
+	}
+	if mode := info.Mode().Perm(); mode&0o077 != 0 {
+		return fmt.Errorf("CONFLUENCE_TOKEN_FILE %q has unsafe permissions %#o: must not be accessible by group or others (chmod 600)", path, mode)
+	}
+	return nil
 }
 
 // Validate は設定内容を検証する。
