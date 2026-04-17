@@ -5,3 +5,19 @@
 
 # beads issue tracker (local only)
 .beads/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.p12
+*.pfx
+
+# Confluence CLI local state (contains history.json with page titles, alias.json)
+.confluence-cli/
+
+# Build artifacts
+/conflux
