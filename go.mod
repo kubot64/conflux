@@ -1,6 +1,6 @@
 module github.com/kubot64/conflux
 
-go 1.26.2
+go 1.26.4
 
 require (
 	github.com/PuerkitoBio/goquery v1.12.0
@@ -16,5 +16,5 @@ require (
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 )
