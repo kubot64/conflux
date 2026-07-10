@@ -24,3 +24,11 @@ updates:
       - "security"
     allow:
       - dependency-type: "direct"
+    # github/codeql-action publishes init/autobuild/analyze as separate
+    # sub-actions that MUST be pinned to the same version. Grouping keeps
+    # them in a single PR; splitting caused a version mismatch that broke
+    # the "Analyze (Go)" job (init 4.37.0 vs autobuild/analyze 4.36.2).
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
