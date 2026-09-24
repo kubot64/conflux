@@ -412,7 +412,7 @@ func decodeLimited(r io.Reader, dest any) error {
 	return nil
 }
 
-// --- SpaceClient ---
+// --- spaces ---
 
 type spaceListResponse struct {
 	Results []struct {
@@ -452,7 +452,7 @@ func (c *Client) ListSpaces(ctx context.Context) ([]port.Space, error) {
 	return spaces, err
 }
 
-// --- PageClient ---
+// --- pages ---
 
 type pageResponse struct {
 	ID    string `json:"id"`
@@ -794,7 +794,7 @@ func (c *Client) UpdatePage(ctx context.Context, id string, version int, title, 
 	return c.toPage(r), nil
 }
 
-// --- AttachmentClient ---
+// --- attachments ---
 
 func (c *Client) ListAttachments(ctx context.Context, pageID string) ([]port.Attachment, error) {
 	path := fmt.Sprintf("/rest/api/content/%s/child/attachment?limit=100", urlEncode(pageID))

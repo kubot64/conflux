@@ -1,10 +1,6 @@
 package port
 
-import (
-	"context"
-	"io"
-	"time"
-)
+import "time"
 
 // --- Space ---
 
@@ -12,10 +8,6 @@ type Space struct {
 	Key  string
 	Name string
 	URL  string
-}
-
-type SpaceClient interface {
-	ListSpaces(ctx context.Context) ([]Space, error)
 }
 
 // --- Page ---
@@ -46,38 +38,14 @@ type PageTreeNode struct {
 	URL      string
 }
 
-type PageClient interface {
-	GetPage(ctx context.Context, id string) (*Page, error)
-	SearchPages(ctx context.Context, keyword, space, after string) ([]PageSearchResult, error)
-	FindPagesByTitle(ctx context.Context, space, title string) ([]PageSearchResult, error)
-	GetPageTree(ctx context.Context, space string, depth int) ([]PageTreeNode, error)
-	CreatePage(ctx context.Context, space, title, storageBody string) (*Page, error)
-	UpdatePage(ctx context.Context, id string, version int, title, storageBody string) (*Page, error)
-}
-
 // --- Attachment ---
 
 type Attachment struct {
-	ID       string
-	Filename string
-	Size     int64
+	ID        string
+	Filename  string
+	Size      int64
 	MediaType string
-	URL      string
-}
-
-type AttachmentClient interface {
-	ListAttachments(ctx context.Context, pageID string) ([]Attachment, error)
-	UploadAttachment(ctx context.Context, pageID, filename string, r io.Reader) (*Attachment, error)
-	DownloadAttachment(ctx context.Context, attachmentID string) (io.ReadCloser, error)
-	GetAttachment(ctx context.Context, attachmentID string) (*Attachment, error)
-}
-
-// --- Converter ---
-
-type Converter interface {
-	MarkdownToStorage(markdown string) (string, error)
-	StorageToMarkdown(storage string) (string, error)
-	ExtractSection(storage, sectionID string) (string, error)
+	URL       string
 }
 
 // --- Alias ---
@@ -95,14 +63,7 @@ type Alias struct {
 	Type   AliasType
 }
 
-type AliasStore interface {
-	Set(name, target string, t AliasType) error
-	Get(name string) (*Alias, error)
-	List() ([]Alias, error)
-	Delete(name string) error
-}
-
-// --- HistoryLogger ---
+// --- History ---
 
 type HistoryEntry struct {
 	Timestamp     time.Time
@@ -113,9 +74,4 @@ type HistoryEntry struct {
 	Space         string
 	VersionBefore int
 	VersionAfter  int
-}
-
-type HistoryLogger interface {
-	Log(entry HistoryEntry) error
-	List(space, sessionID string, limit int) ([]HistoryEntry, error)
 }

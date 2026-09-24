@@ -10,7 +10,7 @@ import (
 	"github.com/kubot64/conflux/internal/port"
 )
 
-// Store は port.AliasStore を実装する。alias.json への読み書きを管理する。
+// Store は alias.json への読み書きを管理する。
 type Store struct {
 	path string
 }
