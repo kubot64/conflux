@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -595,17 +596,18 @@ func TestPost_StatusMapping(t *testing.T) {
 func TestGet_RetriesTransientNetworkError(t *testing.T) {
 	restore := client.SetBackoffBase(time.Millisecond)
 	defer restore()
-	attempts := 0
+	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		if attempts < 3 {
+		n := attempts.Add(1)
+		if n < 3 {
 			hj, ok := w.(http.Hijacker)
 			if !ok {
-				t.Fatal("hijack unsupported")
+				http.Error(w, "hijack unsupported", http.StatusInternalServerError)
+				return
 			}
 			conn, _, err := hj.Hijack()
 			if err != nil {
-				t.Fatal(err)
+				return
 			}
 			conn.Close()
 			return
@@ -619,28 +621,29 @@ func TestGet_RetriesTransientNetworkError(t *testing.T) {
 	if _, err := c.ListSpaces(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if attempts != 3 {
-		t.Fatalf("attempts: got %d, want 3", attempts)
+	if attempts.Load() != 3 {
+		t.Fatalf("attempts: got %d, want 3", attempts.Load())
 	}
 }
 
 func TestPost_NoRetryOnNetworkError(t *testing.T) {
 	restore := client.SetBackoffBase(time.Millisecond)
 	defer restore()
-	attempts := 0
+	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		attempts++
+		attempts.Add(1)
 		hj, ok := w.(http.Hijacker)
 		if !ok {
-			t.Fatal("hijack unsupported")
+			http.Error(w, "hijack unsupported", http.StatusInternalServerError)
+			return
 		}
 		conn, _, err := hj.Hijack()
 		if err != nil {
-			t.Fatal(err)
+			return
 		}
 		conn.Close()
 	}))
@@ -650,8 +653,8 @@ func TestPost_NoRetryOnNetworkError(t *testing.T) {
 	if _, err := c.CreatePage(context.Background(), "DEV", "T", "<p>x</p>"); err == nil {
 		t.Fatal("expected error")
 	}
-	if attempts != 1 {
-		t.Fatalf("POST network error should not retry: attempts %d", attempts)
+	if attempts.Load() != 1 {
+		t.Fatalf("POST network error should not retry: attempts %d", attempts.Load())
 	}
 }
 
