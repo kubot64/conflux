@@ -2,20 +2,19 @@ package converter
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 )
 
-// macroSanitizer はマクロ HTML のタグ・属性をすべて除去するポリシー。
-// Confluence storage の ac:* / ri:* 要素を <!-- macro: ... --> コメントに
-// 書き戻す際、攻撃者制御の script タグやイベントハンドラが下流の
-// Markdown レンダラに漏れないよう防御的に使用する。
-var macroSanitizer = bluemonday.StrictPolicy()
+// macroTokenRE は Markdown 変換後に残るマクロ印を探す。
+// 段落だけに印がある場合は <p> ごとマクロ要素へ戻す。
+var macroTokenRE = regexp.MustCompile(`(?i)<p>\s*%%conflux-macro:([0-9a-f]+)%%\s*</p>|%%conflux-macro:([0-9a-f]+)%%`)
 
 // Converter は port.Converter を実装する。
 type Converter struct {
@@ -39,7 +38,7 @@ func (c *Converter) MarkdownToStorage(markdown string) (string, error) {
 	if err := c.md.Convert([]byte(markdown), &buf); err != nil {
 		return "", fmt.Errorf("markdown to storage: %w", err)
 	}
-	return buf.String(), nil
+	return restoreMacroTokens(buf.String()), nil
 }
 
 // StorageToMarkdown は Confluence XHTML storage 形式を GFM に変換する。
@@ -114,11 +113,13 @@ func nodeToMarkdown(s *goquery.Selection) string {
 		// ただし raw HTML を通すと下流レンダラでの XSS の踏み台になるため、
 		// タグ・属性をすべて除去し、"-->" シーケンスも無害化する。
 		if strings.HasPrefix(tag, "ac:") || strings.HasPrefix(tag, "ri:") {
-			html, _ := goquery.OuterHtml(s)
-			sanitized := macroSanitizer.Sanitize(html)
-			// HTML コメント終端のブレークアウト防止: "--" を " - " に変換。
-			sanitized = strings.ReplaceAll(sanitized, "--", " - ")
-			return "<!-- macro: " + strings.TrimSpace(sanitized) + " -->\n\n"
+			html, err := goquery.OuterHtml(s)
+			if err != nil || strings.TrimSpace(html) == "" {
+				return ""
+			}
+			// goldmark は HTML コメントを落とす。プレーンテキストの印なら往復でき、
+			// hex なので Markdown 上に script やコメント終端は出ない。
+			return "%%conflux-macro:" + hex.EncodeToString([]byte(html)) + "%%\n\n"
 		}
 		// その他はテキストのみ抽出
 		text := strings.TrimSpace(s.Text())
@@ -233,6 +234,67 @@ func (c *Converter) ExtractSection(storage, sectionID string) (string, error) {
 	}
 
 	return sb.String(), nil
+}
+
+func restoreMacroTokens(html string) string {
+	return macroTokenRE.ReplaceAllStringFunc(html, func(match string) string {
+		sub := macroTokenRE.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		encoded := sub[1]
+		if encoded == "" {
+			encoded = sub[2]
+		}
+		restored, ok := sanitizeMacroHTML(encoded)
+		if !ok {
+			return match
+		}
+		return restored
+	})
+}
+
+// sanitizeMacroHTML は印の中身を ac:/ri: 要素だけに戻す。
+// 兄弟要素の script やイベント属性は storage に載せない。
+func sanitizeMacroHTML(encoded string) (string, bool) {
+	raw, err := hex.DecodeString(encoded)
+	if err != nil {
+		return "", false
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(raw)))
+	if err != nil {
+		return "", false
+	}
+	var b strings.Builder
+	doc.Find("body").Children().Each(func(_ int, s *goquery.Selection) {
+		tag := strings.ToLower(goquery.NodeName(s))
+		if !strings.HasPrefix(tag, "ac:") && !strings.HasPrefix(tag, "ri:") {
+			return
+		}
+		s.Find("script,style,iframe,object,embed,link,meta").Remove()
+		s.Find("*").Each(func(_ int, n *goquery.Selection) {
+			if len(n.Nodes) == 0 {
+				return
+			}
+			var drop []string
+			for _, a := range n.Nodes[0].Attr {
+				if strings.HasPrefix(strings.ToLower(a.Key), "on") {
+					drop = append(drop, a.Key)
+				}
+			}
+			for _, key := range drop {
+				n.RemoveAttr(key)
+			}
+		})
+		fragment, err := goquery.OuterHtml(s)
+		if err == nil {
+			b.WriteString(fragment)
+		}
+	})
+	if b.Len() == 0 {
+		return "", false
+	}
+	return b.String(), true
 }
 
 func isHeading(tag string) bool {

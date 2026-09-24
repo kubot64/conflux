@@ -24,14 +24,35 @@ func buildBinary(t *testing.T) string {
 	return binPath
 }
 
+// withEnv は base の環境変数を overrides で置き換える。
+func withEnv(base []string, overrides map[string]string) []string {
+	skip := make(map[string]bool, len(overrides))
+	for k := range overrides {
+		skip[k] = true
+	}
+	out := make([]string, 0, len(base)+len(overrides))
+	for _, e := range base {
+		k, _, ok := strings.Cut(e, "=")
+		if ok && skip[k] {
+			continue
+		}
+		out = append(out, e)
+	}
+	for k, v := range overrides {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
 // testEnv は httptest サーバー URL とトークンを含むテスト用環境変数を返す。
 // CONFLUENCE_ALLOW_INSECURE=true を含み、http:// URL を許可する。
 func testEnv(srvURL string) []string {
-	return append(os.Environ(),
-		"CONFLUENCE_URL="+srvURL,
-		"CONFLUENCE_TOKEN=test-token",
-		"CONFLUENCE_ALLOW_INSECURE=true",
-	)
+	return withEnv(os.Environ(), map[string]string{
+		"CONFLUENCE_URL":            srvURL,
+		"CONFLUENCE_TOKEN":          "test-token",
+		"CONFLUENCE_ALLOW_INSECURE": "true",
+		"CONFLUENCE_CLI_HOME":       filepath.Join(os.TempDir(), "conflux-cli-test-home"),
+	})
 }
 
 // pageAPIHandler は page get テスト用のモック API ハンドラを返す。
@@ -54,9 +75,9 @@ func pageAPIHandler(t *testing.T, validIDs map[string]bool) http.Handler {
 			}
 			if validIDs[id] {
 				json.NewEncoder(w).Encode(map[string]any{
-					"id":    id,
-					"title": "Page " + id,
-					"space": map[string]any{"key": "TEAM"},
+					"id":      id,
+					"title":   "Page " + id,
+					"space":   map[string]any{"key": "TEAM"},
 					"version": map[string]any{"number": 1},
 					"body": map[string]any{
 						"storage": map[string]any{"value": "<p>content of " + id + "</p>"},

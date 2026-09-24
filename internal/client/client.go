@@ -12,6 +12,8 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,9 +23,9 @@ import (
 )
 
 const (
-	maxRetries    = 3
-	backoffBase   = 1 * time.Second
-	backoffMax    = 8 * time.Second
+	maxRetries  = 3
+	backoffBase = 1 * time.Second
+	backoffMax  = 8 * time.Second
 )
 
 // Client は Confluence REST API クライアント。
@@ -96,10 +98,8 @@ func (c *Client) do(req *http.Request, isWrite bool) (*http.Response, error) {
 		err  error
 	)
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			// リクエストボディを再生成できないため、リトライ不可の場合は即リターン
-			// (本実装では body を都度生成しているので問題なし)
-		}
+		savedGetBody := req.GetBody
+		savedLen := req.ContentLength
 		resp, err = c.httpClient.Do(req)
 		if err != nil {
 			// ネットワークエラーはコンテキストチェック
@@ -140,12 +140,10 @@ func (c *Client) do(req *http.Request, isWrite bool) (*http.Response, error) {
 				return nil, contextError(req.Context().Err())
 			case <-time.After(wait):
 			}
-			// リクエストを再生成（同じコンテキスト・メソッド・パスで）
-			newReq, rerr := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), req.Body)
+			newReq, rerr := cloneForRetry(req, savedGetBody, savedLen)
 			if rerr != nil {
-				return nil, apperror.New(apperror.KindServer, rerr.Error())
+				return nil, rerr
 			}
-			newReq.Header = req.Header.Clone()
 			req = newReq
 			continue
 		}
@@ -164,11 +162,10 @@ func (c *Client) do(req *http.Request, isWrite bool) (*http.Response, error) {
 				return nil, contextError(req.Context().Err())
 			case <-time.After(wait):
 			}
-			newReq, rerr := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), req.Body)
+			newReq, rerr := cloneForRetry(req, savedGetBody, savedLen)
 			if rerr != nil {
-				return nil, apperror.New(apperror.KindServer, rerr.Error())
+				return nil, rerr
 			}
-			newReq.Header = req.Header.Clone()
 			req = newReq
 			continue
 		}
@@ -180,6 +177,115 @@ func (c *Client) do(req *http.Request, isWrite bool) (*http.Response, error) {
 		return nil, apperror.New(apperror.KindServer, "unexpected response from server")
 	}
 	return nil, apperror.New(apperror.KindServer, "max retries exceeded")
+}
+
+func cloneForRetry(req *http.Request, getBody func() (io.ReadCloser, error), contentLen int64) (*http.Request, error) {
+	var body io.Reader
+	if getBody != nil {
+		rc, err := getBody()
+		if err != nil {
+			return nil, apperror.New(apperror.KindServer, fmt.Sprintf("retry body: %v", err))
+		}
+		body = rc
+	}
+	cloned, err := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), body)
+	if err != nil {
+		return nil, apperror.New(apperror.KindServer, err.Error())
+	}
+	cloned.Header = req.Header.Clone()
+	cloned.Header.Del("Content-Length")
+	cloned.GetBody = getBody
+	if contentLen > 0 {
+		cloned.ContentLength = contentLen
+	}
+	return cloned, nil
+}
+
+const maxPages = 100
+
+func (c *Client) forEachPage(ctx context.Context, path string, handle func(raw []byte) (string, error)) error {
+	seen := map[string]struct{}{}
+	for i := 0; i < maxPages; i++ {
+		if _, ok := seen[path]; ok {
+			return apperror.New(apperror.KindServer, "pagination loop")
+		}
+		seen[path] = struct{}{}
+		req, err := c.newReq(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := c.do(req, false)
+		if err != nil {
+			return err
+		}
+		raw, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return apperror.New(apperror.KindServer, fmt.Sprintf("read body: %v", err))
+		}
+		next, err := handle(raw)
+		if err != nil {
+			return err
+		}
+		if next == "" {
+			return nil
+		}
+		path, err = c.normalizeNext(next)
+		if err != nil {
+			return err
+		}
+	}
+	return apperror.New(apperror.KindServer, "too many result pages")
+}
+
+func (c *Client) normalizeNext(next string) (string, error) {
+	if strings.HasPrefix(next, "/") {
+		return next, nil
+	}
+	u, err := url.Parse(next)
+	if err != nil {
+		return "", apperror.New(apperror.KindServer, fmt.Sprintf("pagination link: %v", err))
+	}
+	if u.Host != "" {
+		base, err := url.Parse(c.baseURL)
+		if err != nil || !strings.EqualFold(u.Host, base.Host) {
+			return "", apperror.New(apperror.KindServer, "pagination link points to another host")
+		}
+	}
+	if u.RequestURI() == "" {
+		return "", apperror.New(apperror.KindServer, "pagination link is empty")
+	}
+	return u.RequestURI(), nil
+}
+
+func (c *Client) ensureSameOrigin(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return apperror.New(apperror.KindServer, "download url is invalid")
+	}
+	base, err := url.Parse(c.baseURL)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return apperror.New(apperror.KindServer, "base url is invalid")
+	}
+	if !strings.EqualFold(u.Scheme, base.Scheme) || !strings.EqualFold(u.Host, base.Host) {
+		return apperror.New(apperror.KindServer, "download url points to another host")
+	}
+	return nil
+}
+
+func (c *Client) absoluteLink(linkBase, ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+		return ref
+	}
+	base := strings.TrimRight(linkBase, "/")
+	if base == "" {
+		base = c.baseURL
+	}
+	return base + "/" + strings.TrimLeft(ref, "/")
 }
 
 func retryAfterDuration(resp *http.Response) time.Duration {
@@ -218,33 +324,33 @@ type spaceListResponse struct {
 			WebUI string `json:"webui"`
 		} `json:"_links"`
 	} `json:"results"`
+	Links struct {
+		Base string `json:"base"`
+		Next string `json:"next"`
+	} `json:"_links"`
 }
 
 func (c *Client) ListSpaces(ctx context.Context) ([]port.Space, error) {
-	req, err := c.newReq(ctx, http.MethodGet, "/rest/api/space?limit=200", nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.do(req, false)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result spaceListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
-	}
-
-	spaces := make([]port.Space, len(result.Results))
-	for i, r := range result.Results {
-		spaces[i] = port.Space{
-			Key:  r.Key,
-			Name: r.Name,
-			URL:  r.Links.Base + r.Links.WebUI,
+	var spaces []port.Space
+	err := c.forEachPage(ctx, "/rest/api/space?limit=100", func(raw []byte) (string, error) {
+		var result spaceListResponse
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return "", apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
 		}
-	}
-	return spaces, nil
+		for _, r := range result.Results {
+			base := r.Links.Base
+			if base == "" {
+				base = result.Links.Base
+			}
+			spaces = append(spaces, port.Space{
+				Key:  r.Key,
+				Name: r.Name,
+				URL:  c.absoluteLink(base, r.Links.WebUI),
+			})
+		}
+		return result.Links.Next, nil
+	})
+	return spaces, err
 }
 
 // --- PageClient ---
@@ -274,7 +380,7 @@ type pageResponse struct {
 	} `json:"_links"`
 }
 
-func toPage(r pageResponse) *port.Page {
+func (c *Client) toPage(r pageResponse) *port.Page {
 	return &port.Page{
 		ID:           r.ID,
 		Title:        r.Title,
@@ -282,7 +388,7 @@ func toPage(r pageResponse) *port.Page {
 		Version:      r.Version.Number,
 		StorageBody:  r.Body.Storage.Value,
 		LastModified: r.History.LastUpdated.When,
-		URL:          r.Links.Base + r.Links.WebUI,
+		URL:          c.absoluteLink(r.Links.Base, r.Links.WebUI),
 	}
 }
 
@@ -302,13 +408,32 @@ func (c *Client) GetPage(ctx context.Context, id string) (*port.Page, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
 	}
-	return toPage(r), nil
+	return c.toPage(r), nil
+}
+
+func (c *Client) ServerInfo(ctx context.Context) (string, error) {
+	req, err := c.newReq(ctx, http.MethodGet, "/rest/api/serverInfo", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.do(req, false)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
+	}
+	return body.Version, nil
 }
 
 type searchResponse struct {
 	Results []struct {
-		ID      string `json:"id"`
-		Title   string `json:"title"`
+		ID      string               `json:"id"`
+		Title   string               `json:"title"`
 		Space   struct{ Key string } `json:"space"`
 		History struct {
 			LastUpdated struct {
@@ -320,6 +445,10 @@ type searchResponse struct {
 			WebUI string `json:"webui"`
 		} `json:"_links"`
 	} `json:"results"`
+	Links struct {
+		Base string `json:"base"`
+		Next string `json:"next"`
+	} `json:"_links"`
 }
 
 // escapeCQL は Confluence CQL クエリの文字列値をエスケープする。
@@ -327,6 +456,48 @@ func escapeCQL(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
 	return s
+}
+
+func (c *Client) searchResultFrom(r struct {
+	ID      string               `json:"id"`
+	Title   string               `json:"title"`
+	Space   struct{ Key string } `json:"space"`
+	History struct {
+		LastUpdated struct {
+			When time.Time `json:"when"`
+		} `json:"lastUpdated"`
+	} `json:"history"`
+	Links struct {
+		Base  string `json:"base"`
+		WebUI string `json:"webui"`
+	} `json:"_links"`
+}, pageBase string) port.PageSearchResult {
+	base := r.Links.Base
+	if base == "" {
+		base = pageBase
+	}
+	return port.PageSearchResult{
+		ID:           r.ID,
+		Title:        r.Title,
+		Space:        r.Space.Key,
+		LastModified: r.History.LastUpdated.When,
+		URL:          c.absoluteLink(base, r.Links.WebUI),
+	}
+}
+
+func (c *Client) collectSearch(ctx context.Context, path string) ([]port.PageSearchResult, error) {
+	var pages []port.PageSearchResult
+	err := c.forEachPage(ctx, path, func(raw []byte) (string, error) {
+		var result searchResponse
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return "", apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
+		}
+		for _, r := range result.Results {
+			pages = append(pages, c.searchResultFrom(r, result.Links.Base))
+		}
+		return result.Links.Next, nil
+	})
+	return pages, err
 }
 
 func (c *Client) SearchPages(ctx context.Context, keyword, space, after string) ([]port.PageSearchResult, error) {
@@ -342,111 +513,77 @@ func (c *Client) SearchPages(ctx context.Context, keyword, space, after string) 
 	}
 	path := fmt.Sprintf("/rest/api/content/search?cql=%s&expand=history.lastUpdated,space&limit=50",
 		urlEncode(cql))
-	req, err := c.newReq(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.do(req, false)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result searchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
-	}
-	pages := make([]port.PageSearchResult, len(result.Results))
-	for i, r := range result.Results {
-		pages[i] = port.PageSearchResult{
-			ID:           r.ID,
-			Title:        r.Title,
-			Space:        r.Space.Key,
-			LastModified: r.History.LastUpdated.When,
-			URL:          r.Links.Base + r.Links.WebUI,
-		}
-	}
-	return pages, nil
+	return c.collectSearch(ctx, path)
 }
 
 func (c *Client) FindPagesByTitle(ctx context.Context, space, title string) ([]port.PageSearchResult, error) {
 	cql := fmt.Sprintf(`type=page AND space="%s" AND title="%s"`, escapeCQL(space), escapeCQL(title))
-	path := fmt.Sprintf("/rest/api/content/search?cql=%s&expand=history.lastUpdated,space&limit=10", urlEncode(cql))
-	req, err := c.newReq(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.do(req, false)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result searchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
-	}
-	pages := make([]port.PageSearchResult, len(result.Results))
-	for i, r := range result.Results {
-		pages[i] = port.PageSearchResult{
-			ID:           r.ID,
-			Title:        r.Title,
-			Space:        r.Space.Key,
-			LastModified: r.History.LastUpdated.When,
-			URL:          r.Links.Base + r.Links.WebUI,
-		}
-	}
-	return pages, nil
+	path := fmt.Sprintf("/rest/api/content/search?cql=%s&expand=history.lastUpdated,space&limit=25", urlEncode(cql))
+	return c.collectSearch(ctx, path)
 }
 
 func (c *Client) GetPageTree(ctx context.Context, space string, depth int) ([]port.PageTreeNode, error) {
-	// ルートページを取得してから再帰的に子ページを取得する実装（フェーズ2で詳細実装）
-	path := fmt.Sprintf("/rest/api/content?spaceKey=%s&type=page&expand=ancestors&limit=200", space)
-	req, err := c.newReq(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.do(req, false)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Results []struct {
-			ID        string `json:"id"`
-			Title     string `json:"title"`
-			Ancestors []struct {
-				ID string `json:"id"`
-			} `json:"ancestors"`
+	path := fmt.Sprintf("/rest/api/content?spaceKey=%s&type=page&expand=ancestors&limit=100", urlEncode(space))
+	var nodes []port.PageTreeNode
+	seen := map[string]struct{}{}
+	err := c.forEachPage(ctx, path, func(raw []byte) (string, error) {
+		var result struct {
+			Results []struct {
+				ID        string `json:"id"`
+				Title     string `json:"title"`
+				Ancestors []struct {
+					ID string `json:"id"`
+				} `json:"ancestors"`
+				Links struct {
+					Base  string `json:"base"`
+					WebUI string `json:"webui"`
+				} `json:"_links"`
+			} `json:"results"`
 			Links struct {
-				Base  string `json:"base"`
-				WebUI string `json:"webui"`
+				Base string `json:"base"`
+				Next string `json:"next"`
 			} `json:"_links"`
-		} `json:"results"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
-	}
-
-	nodes := make([]port.PageTreeNode, 0, len(result.Results))
-	for _, r := range result.Results {
-		var parentID *string
-		d := len(r.Ancestors)
-		if d > 0 && d <= depth {
-			pid := r.Ancestors[len(r.Ancestors)-1].ID
-			parentID = &pid
-		} else if d > depth {
-			continue // depth 超えはスキップ
 		}
-		nodes = append(nodes, port.PageTreeNode{
-			ID:       r.ID,
-			Title:    r.Title,
-			ParentID: parentID,
-			Depth:    d,
-			URL:      r.Links.Base + r.Links.WebUI,
-		})
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return "", apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
+		}
+		for _, r := range result.Results {
+			if _, ok := seen[r.ID]; ok {
+				continue
+			}
+			d := len(r.Ancestors)
+			if d > depth {
+				continue
+			}
+			var parentID *string
+			if d > 0 {
+				pid := r.Ancestors[len(r.Ancestors)-1].ID
+				parentID = &pid
+			}
+			base := r.Links.Base
+			if base == "" {
+				base = result.Links.Base
+			}
+			seen[r.ID] = struct{}{}
+			nodes = append(nodes, port.PageTreeNode{
+				ID:       r.ID,
+				Title:    r.Title,
+				ParentID: parentID,
+				Depth:    d,
+				URL:      c.absoluteLink(base, r.Links.WebUI),
+			})
+		}
+		return result.Links.Next, nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	sort.SliceStable(nodes, func(i, j int) bool {
+		if nodes[i].Depth != nodes[j].Depth {
+			return nodes[i].Depth < nodes[j].Depth
+		}
+		return nodes[i].ID < nodes[j].ID
+	})
 	return nodes, nil
 }
 
@@ -462,8 +599,11 @@ func (c *Client) CreatePage(ctx context.Context, space, title, storageBody strin
 			},
 		},
 	}
-	b, _ := json.Marshal(payload)
-	req, err := c.newReq(ctx, http.MethodPost, "/rest/api/content", strings.NewReader(string(b)))
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, apperror.New(apperror.KindValidation, fmt.Sprintf("encode: %v", err))
+	}
+	req, err := c.newReq(ctx, http.MethodPost, "/rest/api/content", bytes.NewReader(b))
 	if err != nil {
 		return nil, err
 	}
@@ -477,7 +617,7 @@ func (c *Client) CreatePage(ctx context.Context, space, title, storageBody strin
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
 	}
-	return toPage(r), nil
+	return c.toPage(r), nil
 }
 
 func (c *Client) UpdatePage(ctx context.Context, id string, version int, title, storageBody string) (*port.Page, error) {
@@ -492,9 +632,12 @@ func (c *Client) UpdatePage(ctx context.Context, id string, version int, title, 
 			},
 		},
 	}
-	b, _ := json.Marshal(payload)
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, apperror.New(apperror.KindValidation, fmt.Sprintf("encode: %v", err))
+	}
 	path := fmt.Sprintf("/rest/api/content/%s", id)
-	req, err := c.newReq(ctx, http.MethodPut, path, strings.NewReader(string(b)))
+	req, err := c.newReq(ctx, http.MethodPut, path, bytes.NewReader(b))
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +651,7 @@ func (c *Client) UpdatePage(ctx context.Context, id string, version int, title, 
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("decode: %v", err))
 	}
-	return toPage(r), nil
+	return c.toPage(r), nil
 }
 
 // --- AttachmentClient ---
@@ -550,7 +693,7 @@ func (c *Client) ListAttachments(ctx context.Context, pageID string) ([]port.Att
 			Filename:  r.Title,
 			Size:      r.Extensions.FileSize,
 			MediaType: r.Extensions.MediaType,
-			URL:       r.Links.Base + r.Links.Download,
+			URL:       c.absoluteLink(r.Links.Base, r.Links.Download),
 		}
 	}
 	return attachments, nil
@@ -611,16 +754,27 @@ func (c *Client) UploadAttachment(ctx context.Context, pageID, filename string, 
 		Filename:  r0.Title,
 		Size:      r0.Extensions.FileSize,
 		MediaType: r0.Extensions.MediaType,
-		URL:       r0.Links.Base + r0.Links.Download,
+		URL:       c.absoluteLink(r0.Links.Base, r0.Links.Download),
 	}, nil
 }
 
 func (c *Client) DownloadAttachment(ctx context.Context, attachmentID string) (io.ReadCloser, error) {
-	path := fmt.Sprintf("/download/attachments/%s", attachmentID)
-	req, err := c.newReq(ctx, http.MethodGet, path, nil)
+	meta, err := c.GetAttachment(ctx, attachmentID)
 	if err != nil {
 		return nil, err
 	}
+	if meta.URL == "" {
+		return nil, apperror.New(apperror.KindServer, "attachment has no download url")
+	}
+	if err := c.ensureSameOrigin(meta.URL); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, meta.URL, nil)
+	if err != nil {
+		return nil, apperror.New(apperror.KindServer, fmt.Sprintf("download request: %v", err))
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("User-Agent", c.userAgent)
 	resp, err := c.do(req, false)
 	if err != nil {
 		return nil, err
@@ -629,7 +783,7 @@ func (c *Client) DownloadAttachment(ctx context.Context, attachmentID string) (i
 }
 
 func (c *Client) GetAttachment(ctx context.Context, attachmentID string) (*port.Attachment, error) {
-	path := fmt.Sprintf("/rest/api/content/%s", attachmentID)
+	path := fmt.Sprintf("/rest/api/content/%s?expand=extensions", urlEncode(attachmentID))
 	req, err := c.newReq(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
@@ -660,7 +814,7 @@ func (c *Client) GetAttachment(ctx context.Context, attachmentID string) (*port.
 		Filename:  r.Title,
 		Size:      r.Extensions.FileSize,
 		MediaType: r.Extensions.MediaType,
-		URL:       r.Links.Base + r.Links.Download,
+		URL:       c.absoluteLink(r.Links.Base, r.Links.Download),
 	}, nil
 }
 

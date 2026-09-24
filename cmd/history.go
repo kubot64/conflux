@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 )
 
@@ -43,7 +45,7 @@ var historyListCmd = &cobra.Command{
 		result := make([]entryJSON, len(entries))
 		for i, e := range entries {
 			result[i] = entryJSON{
-				Timestamp:     e.Timestamp.Format("2006-01-02T15:04:05Z"),
+				Timestamp:     formatTimestamp(e.Timestamp),
 				SessionID:     e.SessionID,
 				Action:        e.Action,
 				PageID:        e.PageID,
@@ -53,7 +55,13 @@ var historyListCmd = &cobra.Command{
 				VersionAfter:  e.VersionAfter,
 			}
 		}
-		return w.Write("history list", result)
+		if jsonFlag {
+			return w.Write("history list", result)
+		}
+		for _, e := range result {
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\n", e.Timestamp, e.Action, e.PageID, e.Space, e.Title)
+		}
+		return nil
 	},
 }
 

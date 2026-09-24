@@ -2,13 +2,13 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/kubot64/conflux/internal/apperror"
-	"github.com/kubot64/conflux/internal/config"
 	"github.com/kubot64/conflux/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -20,19 +20,15 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:          "conflux",
-	Short:        "Confluence CLI for AI agents",
-	SilenceUsage: true,
+	Use:           "conflux",
+	Short:         "Confluence CLI for AI agents",
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	// タイムアウトと json フラグを全サブコマンドに伝播させる
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, err := prepareConfig(cmd)
 		if err != nil {
 			return err
-		}
-		cfg.Insecure = cfg.Insecure || allowInsecureFlag
-
-		if err := cfg.Validate(); err != nil {
-			return apperror.New(apperror.KindValidation, err.Error())
 		}
 
 		// タイムアウト優先順位: --timeout > CONFLUENCE_CLI_TIMEOUT > 30s
@@ -49,15 +45,29 @@ var rootCmd = &cobra.Command{
 		}
 
 		ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-		_ = cancel // cobra がコマンド終了時にクリーンアップする
-		cmd.SetContext(ctx)
+		commandTimeoutCancel = cancel
+		cmd.SetContext(withConfig(ctx, cfg))
 		return nil
 	},
 }
 
 // Execute はルートコマンドを実行する。
 func Execute() error {
-	return rootCmd.Execute()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	defer func() {
+		if commandTimeoutCancel != nil {
+			commandTimeoutCancel()
+			commandTimeoutCancel = nil
+		}
+	}()
+
+	executed, err := rootCmd.ExecuteContextC(ctx)
+	if err != nil {
+		newWriter().WriteError(jsonCommandName(executed), err)
+		return err
+	}
+	return nil
 }
 
 func init() {
@@ -69,14 +79,4 @@ func init() {
 // newWriter は --json フラグに基づいて output.Writer を生成する。
 func newWriter() *output.Writer {
 	return output.New(jsonFlag)
-}
-
-// exitWithError は AppError に対応する終了コードで exit する。
-func exitWithError(w *output.Writer, command string, err error) {
-	w.WriteError(command, err)
-	var appErr *apperror.AppError
-	if errors.As(err, &appErr) {
-		os.Exit(int(appErr.Code()))
-	}
-	os.Exit(1)
 }

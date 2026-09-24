@@ -27,6 +27,19 @@ func attachmentAPIHandler(t *testing.T) http.Handler {
 		case r.URL.Path == "/rest/api/serverInfo":
 			json.NewEncoder(w).Encode(map[string]any{"version": "7.9.18"})
 
+		case r.URL.Path == "/rest/api/content/"+attachmentID && r.Method == http.MethodGet:
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":    attachmentID,
+				"title": "test.txt",
+				"extensions": map[string]any{
+					"mediaType": "text/plain",
+					"fileSize":  int64(len(fileContent)),
+				},
+				"_links": map[string]any{
+					"download": "/download/attachments/" + pageID + "/test.txt",
+				},
+			})
+
 		case strings.HasSuffix(r.URL.Path, "/child/attachment") && r.Method == http.MethodPost:
 			// upload: multipart form-data
 			if err := r.ParseMultipartForm(10 << 20); err != nil {
@@ -50,10 +63,9 @@ func attachmentAPIHandler(t *testing.T) http.Handler {
 				},
 			})
 
-		case strings.HasPrefix(r.URL.Path, "/download/attachments/") && r.Method == http.MethodGet:
-			// download
+		case r.URL.Path == "/download/attachments/"+pageID+"/test.txt" && r.Method == http.MethodGet:
 			w.Header().Set("Content-Type", "text/plain")
-			w.Write([]byte(fileContent))
+			_, _ = w.Write([]byte(fileContent))
 
 		default:
 			w.WriteHeader(http.StatusNotFound)

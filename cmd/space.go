@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/kubot64/conflux/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +15,7 @@ var spaceListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "スペース一覧を表示する",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, err := requireRemoteConfig(cmd)
 		if err != nil {
 			return err
 		}

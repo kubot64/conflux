@@ -97,6 +97,12 @@ func (l *Logger) Log(entry port.HistoryEntry) error {
 		return err
 	}
 
+	ts := entry.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	ts = ts.UTC()
+
 	title := entry.Title
 	if l.redactTitle && title != "" {
 		h := sha256.Sum256([]byte(title))
@@ -104,7 +110,7 @@ func (l *Logger) Log(entry port.HistoryEntry) error {
 	}
 
 	hf.Entries = append(hf.Entries, historyEntry{
-		Timestamp:     entry.Timestamp,
+		Timestamp:     ts,
 		SessionID:     entry.SessionID,
 		Action:        entry.Action,
 		PageID:        entry.PageID,

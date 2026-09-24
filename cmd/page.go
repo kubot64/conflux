@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/kubot64/conflux/internal/apperror"
-	"github.com/kubot64/conflux/internal/config"
 	"github.com/kubot64/conflux/internal/converter"
 	"github.com/kubot64/conflux/internal/diff"
+	"github.com/kubot64/conflux/internal/port"
 	"github.com/kubot64/conflux/internal/validator"
 	"github.com/spf13/cobra"
 )
@@ -29,7 +29,7 @@ var pageSearchCmd = &cobra.Command{
 	Short: "ページを検索する",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, err := requireRemoteConfig(cmd)
 		if err != nil {
 			return err
 		}
@@ -62,7 +62,7 @@ var pageSearchCmd = &cobra.Command{
 				ID:           p.ID,
 				Title:        p.Title,
 				Space:        p.Space,
-				LastModified: p.LastModified.Format("2006-01-02T15:04:05Z"),
+				LastModified: formatTimestamp(p.LastModified),
 				URL:          p.URL,
 			}
 		}
@@ -101,7 +101,7 @@ var pageGetCmd = &cobra.Command{
 			return apperror.New(apperror.KindValidation, "--format must be 'markdown', 'html', or 'storage'")
 		}
 
-		cfg, err := config.Load()
+		cfg, err := requireRemoteConfig(cmd)
 		if err != nil {
 			return err
 		}
@@ -110,19 +110,21 @@ var pageGetCmd = &cobra.Command{
 		conv := converter.New()
 
 		type pageResult struct {
-			ID      string `json:"id"`
-			Title   string `json:"title"`
-			Space   string `json:"space"`
-			Version int    `json:"version"`
-			Body    string `json:"body"`
-			URL     string `json:"url"`
+			ID         string `json:"id"`
+			Title      string `json:"title"`
+			Space      string `json:"space"`
+			Version    int    `json:"version"`
+			Body       string `json:"body"`
+			Truncated  bool   `json:"truncated"`
+			TotalChars int    `json:"total_chars"`
+			URL        string `json:"url"`
 		}
 		type pageError struct {
 			ID    string `json:"id"`
 			Error string `json:"error"`
 		}
 
-		var results []pageResult
+		results := []pageResult{}
 		var errors []pageError
 
 		for _, id := range args {
@@ -138,18 +140,17 @@ var pageGetCmd = &cobra.Command{
 				continue
 			}
 
-			if pageGetMaxChars > 0 && len([]rune(body)) > pageGetMaxChars {
-				runes := []rune(body)
-				body = string(runes[:pageGetMaxChars])
-			}
+			body, truncated, totalChars := applyMaxChars(body, pageGetMaxChars)
 
 			results = append(results, pageResult{
-				ID:      page.ID,
-				Title:   page.Title,
-				Space:   page.Space,
-				Version: page.Version,
-				Body:    body,
-				URL:     page.URL,
+				ID:         page.ID,
+				Title:      page.Title,
+				Space:      page.Space,
+				Version:    page.Version,
+				Body:       body,
+				Truncated:  truncated,
+				TotalChars: totalChars,
+				URL:        page.URL,
 			})
 		}
 
@@ -209,7 +210,7 @@ var pageTreeCmd = &cobra.Command{
 			return apperror.New(apperror.KindValidation, "--depth must be between 1 and 10")
 		}
 
-		cfg, err := config.Load()
+		cfg, err := requireRemoteConfig(cmd)
 		if err != nil {
 			return err
 		}
@@ -295,7 +296,7 @@ var pageCreateCmd = &cobra.Command{
 			return apperror.New(apperror.KindValidation, err.Error())
 		}
 
-		cfg, err := config.Load()
+		cfg, err := requireRemoteConfig(cmd)
 		if err != nil {
 			return err
 		}
@@ -332,6 +333,15 @@ var pageCreateCmd = &cobra.Command{
 			Space        string `json:"space"`
 			VersionAfter int    `json:"version_after,omitempty"`
 			URL          string `json:"url,omitempty"`
+			Preview      string `json:"preview,omitempty"`
+		}
+
+		writeCreate := func(r createResult, text string) error {
+			if jsonFlag {
+				return w.Write("page create", r)
+			}
+			fmt.Println(text)
+			return nil
 		}
 
 		if len(existing) >= 2 {
@@ -341,7 +351,12 @@ var pageCreateCmd = &cobra.Command{
 
 		if len(existing) == 0 {
 			if pageCreateDryRun {
-				return w.Write("page create", createResult{Action: "would_create", Title: title, Space: space})
+				return writeCreate(createResult{
+					Action:  "preview",
+					Title:   title,
+					Space:   space,
+					Preview: storageBody,
+				}, "preview: would create "+title+"\n"+storageBody)
 			}
 			page, err := c.CreatePage(cmd.Context(), space, title, storageBody)
 			if err != nil {
@@ -355,11 +370,14 @@ var pageCreateCmd = &cobra.Command{
 				VersionAfter: page.Version,
 				URL:          page.URL,
 			}
-			if jsonFlag {
-				return w.Write("page create", r)
-			}
-			fmt.Printf("Created: %s (%s)\n", page.Title, page.ID)
-			return nil
+			recordHistory(w, "page create", port.HistoryEntry{
+				Action:       "created",
+				PageID:       page.ID,
+				Title:        page.Title,
+				Space:        page.Space,
+				VersionAfter: page.Version,
+			})
+			return writeCreate(r, fmt.Sprintf("Created: %s (%s)", page.Title, page.ID))
 		}
 
 		// len(existing) == 1
@@ -370,21 +388,35 @@ var pageCreateCmd = &cobra.Command{
 				fmt.Sprintf("page with title %q already exists (id=%s)", title, found.ID))
 		case "skip":
 			if pageCreateDryRun {
-				return w.Write("page create", createResult{Action: "would_skip", Title: title, Space: space})
+				return writeCreate(createResult{
+					Action:  "preview",
+					ID:      found.ID,
+					Title:   title,
+					Space:   space,
+					URL:     found.URL,
+					Preview: storageBody,
+				}, fmt.Sprintf("preview: would skip %s (%s)\n%s", title, found.ID, storageBody))
 			}
-			r := createResult{Action: "skipped", ID: found.ID, Title: title, Space: space, URL: found.URL}
-			if jsonFlag {
-				return w.Write("page create", r)
-			}
-			fmt.Printf("Skipped: %s (%s)\n", title, found.ID)
-			return nil
+			return writeCreate(createResult{
+				Action: "skipped",
+				ID:     found.ID,
+				Title:  title,
+				Space:  space,
+				URL:    found.URL,
+			}, fmt.Sprintf("Skipped: %s (%s)", title, found.ID))
 		case "update":
 			existingPage, err := c.GetPage(cmd.Context(), found.ID)
 			if err != nil {
 				return err
 			}
 			if pageCreateDryRun {
-				return w.Write("page create", createResult{Action: "would_update", ID: existingPage.ID, Title: title, Space: space})
+				return writeCreate(createResult{
+					Action:  "preview",
+					ID:      existingPage.ID,
+					Title:   title,
+					Space:   space,
+					Preview: storageBody,
+				}, "preview: would update "+title+"\n"+storageBody)
 			}
 			updated, err := c.UpdatePage(cmd.Context(), existingPage.ID, existingPage.Version+1, title, storageBody)
 			if err != nil {
@@ -398,11 +430,15 @@ var pageCreateCmd = &cobra.Command{
 				VersionAfter: updated.Version,
 				URL:          updated.URL,
 			}
-			if jsonFlag {
-				return w.Write("page create", r)
-			}
-			fmt.Printf("Updated: %s (%s) v%d\n", updated.Title, updated.ID, updated.Version)
-			return nil
+			recordHistory(w, "page create", port.HistoryEntry{
+				Action:        "updated",
+				PageID:        updated.ID,
+				Title:         updated.Title,
+				Space:         updated.Space,
+				VersionBefore: existingPage.Version,
+				VersionAfter:  updated.Version,
+			})
+			return writeCreate(r, fmt.Sprintf("Updated: %s (%s) v%d", updated.Title, updated.ID, updated.Version))
 		}
 		return nil
 	},
@@ -453,7 +489,7 @@ var pageUpdateCmd = &cobra.Command{
 			return err
 		}
 
-		cfg, err := config.Load()
+		cfg, err := requireRemoteConfig(cmd)
 		if err != nil {
 			return err
 		}
@@ -483,14 +519,22 @@ var pageUpdateCmd = &cobra.Command{
 		}
 
 		if pageUpdateDryRun {
-			currentMD, _ := conv.StorageToMarkdown(existing.StorageBody)
+			currentMD, err := conv.StorageToMarkdown(existing.StorageBody)
+			if err != nil {
+				return apperror.New(apperror.KindServer, fmt.Sprintf("storage convert: %v", err))
+			}
 			udiff := diff.Unified(currentMD, markdown, "current", "new")
-			return w.Write("page update", updateResult{
-				Action: "would_update",
+			r := updateResult{
+				Action: "preview",
 				ID:     id,
 				Title:  existing.Title,
 				Diff:   udiff,
-			})
+			}
+			if jsonFlag {
+				return w.Write("page update", r)
+			}
+			fmt.Printf("preview: %s (%s)\n%s\n", existing.Title, id, udiff)
+			return nil
 		}
 
 		updated, err := c.UpdatePage(cmd.Context(), id, existing.Version+1, existing.Title, storageBody)
@@ -505,6 +549,14 @@ var pageUpdateCmd = &cobra.Command{
 			VersionAfter: updated.Version,
 			URL:          updated.URL,
 		}
+		recordHistory(w, "page update", port.HistoryEntry{
+			Action:        "updated",
+			PageID:        updated.ID,
+			Title:         updated.Title,
+			Space:         updated.Space,
+			VersionBefore: existing.Version,
+			VersionAfter:  updated.Version,
+		})
 		if jsonFlag {
 			return w.Write("page update", r)
 		}
@@ -530,7 +582,7 @@ func init() {
 	pageCreateCmd.Flags().StringVar(&pageCreateSpaceFlag, "space", "", "スペースキー（省略時: CONFLUENCE_DEFAULT_SPACE）")
 	pageCreateCmd.Flags().StringVar(&pageCreateTitleFlag, "title", "", "ページタイトル（省略時: 先頭 # 見出し）")
 	pageCreateCmd.Flags().BoolVar(&pageCreateDryRun, "dry-run", false, "実際には作成しない")
-	pageCreateCmd.Flags().StringVar(&pageCreateIfExistsFlag, "if-exists", "error", "既存ページがある場合の動作 (skip|error|update)")
+	pageCreateCmd.Flags().StringVar(&pageCreateIfExistsFlag, "if-exists", "skip", "既存ページがある場合の動作 (skip|error|update)")
 	pageCmd.AddCommand(pageCreateCmd)
 
 	pageUpdateCmd.Flags().BoolVar(&pageUpdateDryRun, "dry-run", false, "実際には更新せず差分を表示する")

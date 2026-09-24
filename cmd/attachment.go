@@ -5,10 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/kubot64/conflux/internal/apperror"
-	"github.com/kubot64/conflux/internal/config"
 	"github.com/kubot64/conflux/internal/port"
 	"github.com/kubot64/conflux/internal/validator"
 	"github.com/spf13/cobra"
@@ -29,7 +27,7 @@ var attachmentListCmd = &cobra.Command{
 			return apperror.New(apperror.KindValidation, err.Error())
 		}
 
-		cfg, err := config.Load()
+		cfg, err := requireRemoteConfig(cmd)
 		if err != nil {
 			return err
 		}
@@ -85,7 +83,7 @@ var attachmentUploadCmd = &cobra.Command{
 		}
 		defer f.Close()
 
-		cfg, err := config.Load()
+		cfg, err := requireRemoteConfig(cmd)
 		if err != nil {
 			return err
 		}
@@ -96,17 +94,12 @@ var attachmentUploadCmd = &cobra.Command{
 			return err
 		}
 
-		// 履歴の記録
-		logger, _ := newHistoryLogger()
-		if logger != nil {
-			_ = logger.Log(port.HistoryEntry{
-				Timestamp: time.Now(),
-				SessionID: os.Getenv("CONFLUENCE_CLI_SESSION_ID"),
-				Action:    "uploaded",
-				PageID:    pageID,
-				Title:     uploaded.Filename,
-			})
-		}
+		w := newWriter()
+		recordHistory(w, "attachment upload", port.HistoryEntry{
+			Action: "uploaded",
+			PageID: pageID,
+			Title:  uploaded.Filename,
+		})
 
 		type uploadResult struct {
 			ID       string `json:"id"`
@@ -121,7 +114,6 @@ var attachmentUploadCmd = &cobra.Command{
 			URL:      uploaded.URL,
 		}
 
-		w := newWriter()
 		if jsonFlag {
 			return w.Write("attachment upload", r)
 		}
@@ -139,11 +131,8 @@ var attachmentDownloadCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		attachmentID := args[0]
 
-		cfg, err := config.Load()
+		cfg, err := requireRemoteConfig(cmd)
 		if err != nil {
-			return err
-		}
-		if err := cfg.Validate(); err != nil {
 			return err
 		}
 
