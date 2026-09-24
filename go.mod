@@ -1,13 +1,13 @@
 module github.com/kubot64/conflux
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/sergi/go-diff v1.4.0
 	github.com/spf13/cobra v1.10.2
-	github.com/yuin/goldmark v1.8.5
+	github.com/yuin/goldmark v1.8.6
 )
 
 require (
