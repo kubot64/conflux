@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -117,6 +118,10 @@ func TestPost_Retry429(t *testing.T) {
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			attempts++
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `"title":"Test"`) {
+				t.Errorf("attempt %d body missing title: %s", attempts, body)
+			}
 			if attempts <= 2 {
 				w.Header().Set("Retry-After", "0")
 				w.WriteHeader(http.StatusTooManyRequests)
@@ -358,5 +363,89 @@ func TestGetPage_NotFound(t *testing.T) {
 	_, err := c.GetPage(context.Background(), "99999")
 	if err == nil {
 		t.Fatal("expected not found error")
+	}
+}
+
+func TestListSpaces_FollowsNext(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("start") == "1" {
+			fmt.Fprintf(w, `{"results":[{"key":"B","name":"Bee","_links":{"webui":"/display/B"}}],"_links":{"base":"%s"}}`, srv.URL)
+			return
+		}
+		fmt.Fprintf(w, `{"results":[{"key":"A","name":"Aye","_links":{"webui":"/display/A"}}],"_links":{"base":"%s","next":"%s/rest/api/space?limit=1&start=1"}}`, srv.URL, srv.URL)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	spaces, err := c.ListSpaces(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spaces) != 2 {
+		t.Fatalf("spaces: got %d, want 2 (%v)", len(spaces), spaces)
+	}
+	if spaces[0].Key != "A" || spaces[1].Key != "B" {
+		t.Fatalf("keys: %+v", spaces)
+	}
+	if !strings.HasPrefix(spaces[0].URL, "http") {
+		t.Errorf("space URL should be absolute, got %q", spaces[0].URL)
+	}
+}
+
+func TestGetPageTree_PaginatesAndOrdersByDepth(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("start") == "1" {
+			fmt.Fprintf(w, `{"results":[{"id":"1","title":"Root","ancestors":[],"_links":{"webui":"/pages/1"}}],"_links":{"base":"%s"}}`, srv.URL)
+			return
+		}
+		fmt.Fprintf(w, `{"results":[{"id":"2","title":"Child","ancestors":[{"id":"1"}],"_links":{"webui":"/pages/2"}}],"_links":{"next":"%s/rest/api/content?start=1","base":"%s"}}`, srv.URL, srv.URL)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	nodes, err := c.GetPageTree(context.Background(), "TEAM", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("nodes: got %d, want 2", len(nodes))
+	}
+	if nodes[0].Depth != 0 || nodes[0].ID != "1" {
+		t.Fatalf("first node should be root, got %+v", nodes[0])
+	}
+	if nodes[1].Depth != 1 || nodes[1].ParentID == nil || *nodes[1].ParentID != "1" {
+		t.Fatalf("second node should be child, got %+v", nodes[1])
+	}
+}
+
+func TestDownloadAttachment_FollowsDownloadLink(t *testing.T) {
+	const body = "file-bytes"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/api/content/att-9":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":"att-9","title":"a.txt","extensions":{"mediaType":"text/plain","fileSize":%d},"_links":{"download":"/download/attachments/42/a.txt"}}`, len(body))
+		case "/download/attachments/42/a.txt":
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = io.WriteString(w, body)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	rc, err := c.DownloadAttachment(context.Background(), "att-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	got, _ := io.ReadAll(rc)
+	if string(got) != body {
+		t.Fatalf("body: got %q", got)
 	}
 }

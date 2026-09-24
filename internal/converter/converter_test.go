@@ -115,6 +115,25 @@ func TestStorageToMarkdown_Link(t *testing.T) {
 	}
 }
 
+func TestMacroRoundTrip_RestoresStructuredMacro(t *testing.T) {
+	c := newConverter()
+	macro := `<ac:structured-macro ac:name="info"><ac:rich-text-body><p>note</p></ac:rich-text-body></ac:structured-macro>`
+	md, err := c.StorageToMarkdown(macro)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(md, "<script") || strings.Contains(md, "onerror") {
+		t.Fatalf("markdown must not contain raw markup, got: %s", md)
+	}
+	storage, err := c.MarkdownToStorage(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(storage, `ac:name="info"`) {
+		t.Fatalf("round-trip dropped macro, storage: %s\nmarkdown: %s", storage, md)
+	}
+}
+
 func TestStorageToMarkdown_MacroPreserved(t *testing.T) {
 	c := newConverter()
 	macro := `<ac:structured-macro ac:name="info"><ac:rich-text-body><p>note</p></ac:rich-text-body></ac:structured-macro>`
@@ -122,9 +141,8 @@ func TestStorageToMarkdown_MacroPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// マクロは <!-- macro: ... --> コメントとして保持される
-	if !strings.Contains(out, "<!-- macro:") {
-		t.Errorf("expected macro comment in output, got: %s", out)
+	if !strings.Contains(out, "conflux-macro:") {
+		t.Errorf("expected macro token in output, got: %s", out)
 	}
 }
 

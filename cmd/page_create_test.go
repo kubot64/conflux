@@ -112,6 +112,12 @@ func TestPageCreate_IfExists(t *testing.T) {
 			wantExitCode: 5, // KindConflict → ExitConflict=5
 		},
 		{
+			name:         "1件_default_skip",
+			searchCount:  1,
+			wantExitCode: 0,
+			wantAction:   "skipped",
+		},
+		{
 			name:         "1件_if-exists_skip",
 			searchCount:  1,
 			ifExists:     "skip",
@@ -132,19 +138,19 @@ func TestPageCreate_IfExists(t *testing.T) {
 			wantExitCode: 5, // KindConflict → ExitConflict=5
 		},
 		{
-			name:         "dry-run_0件_would_create",
+			name:         "dry-run_0件_preview",
 			searchCount:  0,
 			dryRun:       true,
 			wantExitCode: 0,
-			wantAction:   "would_create",
+			wantAction:   "preview",
 		},
 		{
-			name:         "dry-run_1件_if-exists_update_would_update",
+			name:         "dry-run_1件_if-exists_update_preview",
 			searchCount:  1,
 			ifExists:     "update",
 			dryRun:       true,
 			wantExitCode: 0,
-			wantAction:   "would_update",
+			wantAction:   "preview",
 		},
 	}
 

@@ -47,7 +47,7 @@ func (e *AppError) Code() ExitCode {
 	case KindConflict:
 		return ExitConflict
 	default:
-		return ExitOK
+		return ExitValidation
 	}
 }
 

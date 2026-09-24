@@ -25,6 +25,7 @@ func TestAppError_Code(t *testing.T) {
 		{apperror.KindCanceled, apperror.ExitServer},
 		{apperror.KindNotFound, apperror.ExitNotFound},
 		{apperror.KindConflict, apperror.ExitConflict},
+		{apperror.ErrorKind("unknown"), apperror.ExitValidation},
 	}
 	for _, tt := range tests {
 		e := &apperror.AppError{Kind: tt.kind, Message: "msg"}

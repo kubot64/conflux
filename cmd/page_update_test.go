@@ -34,9 +34,9 @@ func pageUpdateAPIHandler(t *testing.T) http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(map[string]any{
-				"id":    pageID,
-				"title": "Existing Page",
-				"space": map[string]any{"key": "TEAM"},
+				"id":      pageID,
+				"title":   "Existing Page",
+				"space":   map[string]any{"key": "TEAM"},
 				"version": map[string]any{"number": 3},
 				"body": map[string]any{
 					"storage": map[string]any{"value": "<p>old content</p>"},
@@ -51,9 +51,9 @@ func pageUpdateAPIHandler(t *testing.T) http.Handler {
 			// page update
 			id := strings.TrimPrefix(r.URL.Path, "/rest/api/content/")
 			json.NewEncoder(w).Encode(map[string]any{
-				"id":    id,
-				"title": "Existing Page",
-				"space": map[string]any{"key": "TEAM"},
+				"id":      id,
+				"title":   "Existing Page",
+				"space":   map[string]any{"key": "TEAM"},
 				"version": map[string]any{"number": 4},
 				"body": map[string]any{
 					"storage": map[string]any{"value": "<p>new content</p>"},
@@ -132,8 +132,8 @@ func TestPageUpdate(t *testing.T) {
 		if !ok {
 			t.Fatalf("result is not object: %T\nraw: %s", resp["result"], out)
 		}
-		if result["action"] != "would_update" {
-			t.Errorf("action: got %v, want 'would_update'", result["action"])
+		if result["action"] != "preview" {
+			t.Errorf("action: got %v, want 'preview'", result["action"])
 		}
 		// dry-run では diff フィールドが存在するはず
 		if _, ok := result["diff"]; !ok {
