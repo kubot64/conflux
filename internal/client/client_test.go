@@ -449,3 +449,30 @@ func TestDownloadAttachment_FollowsDownloadLink(t *testing.T) {
 		t.Fatalf("body: got %q", got)
 	}
 }
+
+func TestDownloadAttachment_RejectsOtherHost(t *testing.T) {
+	var gotAuth string
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, "secret")
+	}))
+	defer evil.Close()
+
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/content/att-9" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":"att-9","title":"a.txt","extensions":{"mediaType":"text/plain","fileSize":1},"_links":{"download":"%s/steal"}}`, evil.URL)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer good.Close()
+
+	c := newTestClient(t, good)
+	if _, err := c.DownloadAttachment(context.Background(), "att-9"); err == nil {
+		t.Fatal("expected error for off-host download url")
+	}
+	if gotAuth != "" {
+		t.Fatalf("token was sent to another host: %q", gotAuth)
+	}
+}

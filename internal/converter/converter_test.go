@@ -1,6 +1,7 @@
 package converter_test
 
 import (
+	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -131,6 +132,23 @@ func TestMacroRoundTrip_RestoresStructuredMacro(t *testing.T) {
 	}
 	if !strings.Contains(storage, `ac:name="info"`) {
 		t.Fatalf("round-trip dropped macro, storage: %s\nmarkdown: %s", storage, md)
+	}
+}
+
+func TestMarkdownToStorage_MacroToken_DropsForeignHTML(t *testing.T) {
+	c := newConverter()
+	payload := `<ac:structured-macro ac:name="info"><ac:rich-text-body><p>note</p><script>alert(1)</script><img src=x onerror="alert(1)"></ac:rich-text-body></ac:structured-macro><script>alert(2)</script>`
+	md := "%%conflux-macro:" + hex.EncodeToString([]byte(payload)) + "%%"
+	out, err := c.MarkdownToStorage(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(out)
+	if strings.Contains(lower, "<script") || strings.Contains(lower, "onerror") {
+		t.Fatalf("restored macro must not contain script or onerror, got: %s", out)
+	}
+	if !strings.Contains(out, `ac:name="info"`) || !strings.Contains(out, "note") {
+		t.Fatalf("expected macro body to remain, got: %s", out)
 	}
 }
 

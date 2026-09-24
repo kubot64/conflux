@@ -258,6 +258,21 @@ func (c *Client) normalizeNext(next string) (string, error) {
 	return u.RequestURI(), nil
 }
 
+func (c *Client) ensureSameOrigin(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return apperror.New(apperror.KindServer, "download url is invalid")
+	}
+	base, err := url.Parse(c.baseURL)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return apperror.New(apperror.KindServer, "base url is invalid")
+	}
+	if !strings.EqualFold(u.Scheme, base.Scheme) || !strings.EqualFold(u.Host, base.Host) {
+		return apperror.New(apperror.KindServer, "download url points to another host")
+	}
+	return nil
+}
+
 func (c *Client) absoluteLink(linkBase, ref string) string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -750,6 +765,9 @@ func (c *Client) DownloadAttachment(ctx context.Context, attachmentID string) (i
 	}
 	if meta.URL == "" {
 		return nil, apperror.New(apperror.KindServer, "attachment has no download url")
+	}
+	if err := c.ensureSameOrigin(meta.URL); err != nil {
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, meta.URL, nil)
 	if err != nil {

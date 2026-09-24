@@ -246,17 +246,55 @@ func restoreMacroTokens(html string) string {
 		if encoded == "" {
 			encoded = sub[2]
 		}
-		raw, err := hex.DecodeString(encoded)
-		if err != nil {
+		restored, ok := sanitizeMacroHTML(encoded)
+		if !ok {
 			return match
 		}
-		trimmed := strings.TrimSpace(string(raw))
-		lower := strings.ToLower(trimmed)
-		if !strings.HasPrefix(lower, "<ac:") && !strings.HasPrefix(lower, "<ri:") {
-			return match
-		}
-		return string(raw)
+		return restored
 	})
+}
+
+// sanitizeMacroHTML は印の中身を ac:/ri: 要素だけに戻す。
+// 兄弟要素の script やイベント属性は storage に載せない。
+func sanitizeMacroHTML(encoded string) (string, bool) {
+	raw, err := hex.DecodeString(encoded)
+	if err != nil {
+		return "", false
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(raw)))
+	if err != nil {
+		return "", false
+	}
+	var b strings.Builder
+	doc.Find("body").Children().Each(func(_ int, s *goquery.Selection) {
+		tag := strings.ToLower(goquery.NodeName(s))
+		if !strings.HasPrefix(tag, "ac:") && !strings.HasPrefix(tag, "ri:") {
+			return
+		}
+		s.Find("script,style,iframe,object,embed,link,meta").Remove()
+		s.Find("*").Each(func(_ int, n *goquery.Selection) {
+			if len(n.Nodes) == 0 {
+				return
+			}
+			var drop []string
+			for _, a := range n.Nodes[0].Attr {
+				if strings.HasPrefix(strings.ToLower(a.Key), "on") {
+					drop = append(drop, a.Key)
+				}
+			}
+			for _, key := range drop {
+				n.RemoveAttr(key)
+			}
+		})
+		fragment, err := goquery.OuterHtml(s)
+		if err == nil {
+			b.WriteString(fragment)
+		}
+	})
+	if b.Len() == 0 {
+		return "", false
+	}
+	return b.String(), true
 }
 
 func isHeading(tag string) bool {
