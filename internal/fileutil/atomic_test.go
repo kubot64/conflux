@@ -3,6 +3,7 @@ package fileutil_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kubot64/conflux/internal/fileutil"
@@ -55,6 +56,26 @@ func TestAtomicWrite_NoTmpFileLeft(t *testing.T) {
 	for _, e := range entries {
 		if e.Name() != "test.json" {
 			t.Errorf("unexpected file: %s", e.Name())
+		}
+	}
+}
+
+func TestAtomicWrite_RenameFailureRemovesTemp(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "dest")
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := fileutil.AtomicWrite(dest, []byte("x"), 0o600); err == nil {
+		t.Fatal("expected rename onto a directory to fail")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".tmp-") {
+			t.Errorf("temp file left behind: %s", e.Name())
 		}
 	}
 }

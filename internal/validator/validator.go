@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -45,6 +46,17 @@ func Title(title string) error {
 		if unicode.IsControl(r) {
 			return fmt.Errorf("title must not contain control characters (e.g. newline, tab, null)")
 		}
+	}
+	return nil
+}
+
+// ISODate は空文字、または YYYY-MM-DD を受け付ける。
+func ISODate(s string) error {
+	if s == "" {
+		return nil
+	}
+	if _, err := time.Parse("2006-01-02", s); err != nil {
+		return fmt.Errorf("--after must be YYYY-MM-DD, got %q", s)
 	}
 	return nil
 }

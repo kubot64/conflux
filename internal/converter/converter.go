@@ -26,7 +26,6 @@ func New() *Converter {
 	md := goldmark.New(
 		goldmark.WithExtensions(
 			extension.GFM,
-			extension.Table,
 		),
 	)
 	return &Converter{md: md}
@@ -51,142 +50,383 @@ func (c *Converter) StorageToMarkdown(storage string) (string, error) {
 		return "", fmt.Errorf("storage to markdown: %w", err)
 	}
 
+	root := doc.Find("div").First()
+	md, err := contentsToMarkdown(root)
+	if err != nil {
+		return "", err
+	}
+	md = strings.TrimSpace(md)
+	if err := ensureMacrosPreserved(root, md); err != nil {
+		return "", err
+	}
+	return md, nil
+}
+
+// contentsToMarkdown は要素の直下（テキストノードを含む）を Markdown にする。
+func contentsToMarkdown(s *goquery.Selection) (string, error) {
 	var sb strings.Builder
-	doc.Find("div").First().Children().Each(func(_ int, s *goquery.Selection) {
-		sb.WriteString(nodeToMarkdown(s))
+	var convErr error
+	s.Contents().Each(func(_ int, n *goquery.Selection) {
+		if convErr != nil {
+			return
+		}
+		if goquery.NodeName(n) == "#text" {
+			if t := strings.TrimSpace(n.Text()); t != "" {
+				sb.WriteString(t)
+				sb.WriteString("\n\n")
+			}
+			return
+		}
+		piece, err := nodeToMarkdown(n)
+		if err != nil {
+			convErr = err
+			return
+		}
+		sb.WriteString(piece)
 	})
-	return strings.TrimSpace(sb.String()), nil
+	return sb.String(), convErr
 }
 
 // nodeToMarkdown は goquery Selection を Markdown 文字列に変換する。
-func nodeToMarkdown(s *goquery.Selection) string {
-	tag := goquery.NodeName(s)
+func nodeToMarkdown(s *goquery.Selection) (string, error) {
+	tag := strings.ToLower(goquery.NodeName(s))
 	switch tag {
-	case "h1":
-		return "# " + s.Text() + "\n\n"
-	case "h2":
-		return "## " + s.Text() + "\n\n"
-	case "h3":
-		return "### " + s.Text() + "\n\n"
-	case "h4":
-		return "#### " + s.Text() + "\n\n"
-	case "h5":
-		return "##### " + s.Text() + "\n\n"
-	case "h6":
-		return "###### " + s.Text() + "\n\n"
+	case "h1", "h2", "h3", "h4", "h5", "h6":
+		level := int(tag[1] - '0')
+		inner, err := inlineToMarkdown(s)
+		if err != nil {
+			return "", err
+		}
+		return strings.Repeat("#", level) + " " + strings.TrimSpace(inner) + "\n\n", nil
 	case "p":
-		return inlineToMarkdown(s) + "\n\n"
+		inner, err := inlineToMarkdown(s)
+		if err != nil {
+			return "", err
+		}
+		return inner + "\n\n", nil
 	case "ul":
-		var sb strings.Builder
-		s.Children().Each(func(_ int, li *goquery.Selection) {
-			sb.WriteString("- " + inlineToMarkdown(li) + "\n")
-		})
-		sb.WriteString("\n")
-		return sb.String()
+		return listToMarkdown(s, false)
 	case "ol":
-		var sb strings.Builder
-		s.Children().Each(func(i int, li *goquery.Selection) {
-			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, inlineToMarkdown(li)))
-		})
-		sb.WriteString("\n")
-		return sb.String()
+		return listToMarkdown(s, true)
 	case "pre":
-		code := s.Find("code")
-		if code.Length() > 0 {
-			return "```\n" + code.Text() + "\n```\n\n"
-		}
-		return "```\n" + s.Text() + "\n```\n\n"
+		return codeBlockToMarkdown(s), nil
 	case "blockquote":
-		lines := strings.Split(strings.TrimSpace(s.Text()), "\n")
-		var sb strings.Builder
-		for _, l := range lines {
-			sb.WriteString("> " + l + "\n")
+		inner, err := contentsToMarkdown(s)
+		if err != nil {
+			return "", err
 		}
-		sb.WriteString("\n")
-		return sb.String()
+		return prefixLines("> ", inner) + "\n", nil
 	case "hr":
-		return "---\n\n"
+		return "---\n\n", nil
 	case "table":
 		return tableToMarkdown(s)
+	case "div", "section", "article", "thead", "tbody", "tfoot":
+		return contentsToMarkdown(s)
 	default:
-		// Confluence マクロ（ac:structured-macro, ac:image など）はコメントとして保持。
-		// ただし raw HTML を通すと下流レンダラでの XSS の踏み台になるため、
-		// タグ・属性をすべて除去し、"-->" シーケンスも無害化する。
-		if strings.HasPrefix(tag, "ac:") || strings.HasPrefix(tag, "ri:") {
-			html, err := goquery.OuterHtml(s)
-			if err != nil || strings.TrimSpace(html) == "" {
-				return ""
-			}
-			// goldmark は HTML コメントを落とす。プレーンテキストの印なら往復でき、
-			// hex なので Markdown 上に script やコメント終端は出ない。
-			return "%%conflux-macro:" + hex.EncodeToString([]byte(html)) + "%%\n\n"
+		if isMacroTag(tag) {
+			return macroToken(s)
 		}
-		// その他はテキストのみ抽出
+		if s.Children().Length() > 0 {
+			return contentsToMarkdown(s)
+		}
 		text := strings.TrimSpace(s.Text())
 		if text == "" {
-			return ""
+			return "", nil
 		}
-		return text + "\n\n"
+		return text + "\n\n", nil
 	}
 }
 
-// inlineToMarkdown はインライン要素を含む Selection を Markdown に変換する。
-func inlineToMarkdown(s *goquery.Selection) string {
+func listToMarkdown(s *goquery.Selection, ordered bool) (string, error) {
 	var sb strings.Builder
-	s.Contents().Each(func(_ int, n *goquery.Selection) {
-		tag := goquery.NodeName(n)
-		switch tag {
-		case "#text":
-			sb.WriteString(n.Text())
-		case "strong", "b":
-			sb.WriteString("**" + n.Text() + "**")
-		case "em", "i":
-			sb.WriteString("*" + n.Text() + "*")
-		case "code":
-			sb.WriteString("`" + n.Text() + "`")
-		case "a":
-			href, _ := n.Attr("href")
-			sb.WriteString("[" + n.Text() + "](" + href + ")")
-		case "br":
-			sb.WriteString("  \n")
-		default:
-			sb.WriteString(n.Text())
+	var convErr error
+	idx := 0
+	s.Children().Each(func(_ int, li *goquery.Selection) {
+		if convErr != nil || goquery.NodeName(li) != "li" {
+			return
+		}
+		idx++
+		head, nested, err := liBody(li)
+		if err != nil {
+			convErr = err
+			return
+		}
+		prefix := "- "
+		if ordered {
+			prefix = fmt.Sprintf("%d. ", idx)
+		}
+		sb.WriteString(prefix + head + "\n")
+		if nested != "" {
+			sb.WriteString(nested)
 		}
 	})
+	if convErr != nil {
+		return "", convErr
+	}
+	sb.WriteString("\n")
+	return sb.String(), nil
+}
+
+func liBody(li *goquery.Selection) (string, string, error) {
+	var head strings.Builder
+	var nested strings.Builder
+	var convErr error
+	li.Contents().Each(func(_ int, n *goquery.Selection) {
+		if convErr != nil {
+			return
+		}
+		tag := strings.ToLower(goquery.NodeName(n))
+		switch tag {
+		case "ul", "ol":
+			block, err := listToMarkdown(n, tag == "ol")
+			if err != nil {
+				convErr = err
+				return
+			}
+			nested.WriteString(indentBlock(block, "  "))
+		case "#text":
+			head.WriteString(n.Text())
+		default:
+			if tag == "p" || tag == "div" {
+				inner, err := inlineToMarkdown(n)
+				if err != nil {
+					convErr = err
+					return
+				}
+				if head.Len() > 0 && strings.TrimSpace(inner) != "" {
+					head.WriteByte(' ')
+				}
+				head.WriteString(strings.TrimSpace(inner))
+				return
+			}
+			piece, err := inlineNode(n)
+			if err != nil {
+				convErr = err
+				return
+			}
+			head.WriteString(piece)
+		}
+	})
+	return strings.TrimSpace(head.String()), nested.String(), convErr
+}
+
+func codeBlockToMarkdown(s *goquery.Selection) string {
+	code := s.Find("code").First()
+	lang := ""
+	text := s.Text()
+	if code.Length() > 0 {
+		text = code.Text()
+		lang = codeLanguage(code)
+		if lang == "" {
+			lang = codeLanguage(s)
+		}
+	}
+	return "```" + lang + "\n" + text + "\n```\n\n"
+}
+
+func codeLanguage(s *goquery.Selection) string {
+	class, _ := s.Attr("class")
+	const marker = "language-"
+	if i := strings.Index(class, marker); i >= 0 {
+		lang := class[i+len(marker):]
+		if sp := strings.IndexAny(lang, " \t"); sp >= 0 {
+			lang = lang[:sp]
+		}
+		return lang
+	}
+	return ""
+}
+
+func macroToken(s *goquery.Selection) (string, error) {
+	html, err := goquery.OuterHtml(s)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(html) == "" {
+		return "", nil
+	}
+	// goldmark は HTML コメントを落とす。プレーンテキストの印なら往復でき、
+	// hex なので Markdown 上に script やコメント終端は出ない。
+	return "%%conflux-macro:" + hex.EncodeToString([]byte(html)) + "%%\n\n", nil
+}
+
+func isMacroTag(tag string) bool {
+	tag = strings.ToLower(tag)
+	return strings.HasPrefix(tag, "ac:") || strings.HasPrefix(tag, "ri:")
+}
+
+func indentBlock(block, prefix string) string {
+	if block == "" {
+		return ""
+	}
+	lines := strings.Split(block, "\n")
+	var sb strings.Builder
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		sb.WriteString(prefix)
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
 	return sb.String()
 }
 
+func prefixLines(prefix, block string) string {
+	block = strings.TrimSpace(block)
+	if block == "" {
+		return ""
+	}
+	lines := strings.Split(block, "\n")
+	var sb strings.Builder
+	for _, line := range lines {
+		sb.WriteString(prefix)
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
+// inlineToMarkdown はインライン要素を含む Selection を Markdown に変換する。
+func inlineToMarkdown(s *goquery.Selection) (string, error) {
+	var sb strings.Builder
+	var convErr error
+	s.Contents().Each(func(_ int, n *goquery.Selection) {
+		if convErr != nil {
+			return
+		}
+		piece, err := inlineNode(n)
+		if err != nil {
+			convErr = err
+			return
+		}
+		sb.WriteString(piece)
+	})
+	return sb.String(), convErr
+}
+
+func inlineNode(n *goquery.Selection) (string, error) {
+	tag := strings.ToLower(goquery.NodeName(n))
+	switch tag {
+	case "#text":
+		return n.Text(), nil
+	case "strong", "b":
+		inner, err := inlineToMarkdown(n)
+		if err != nil {
+			return "", err
+		}
+		return "**" + inner + "**", nil
+	case "em", "i":
+		inner, err := inlineToMarkdown(n)
+		if err != nil {
+			return "", err
+		}
+		return "*" + inner + "*", nil
+	case "del", "s", "strike":
+		inner, err := inlineToMarkdown(n)
+		if err != nil {
+			return "", err
+		}
+		return "~~" + inner + "~~", nil
+	case "code":
+		return "`" + n.Text() + "`", nil
+	case "a":
+		href, _ := n.Attr("href")
+		inner, err := inlineToMarkdown(n)
+		if err != nil {
+			return "", err
+		}
+		return "[" + inner + "](" + href + ")", nil
+	case "br":
+		return "  \n", nil
+	case "span":
+		return inlineToMarkdown(n)
+	default:
+		if isMacroTag(tag) {
+			tok, err := macroToken(n)
+			if err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(tok), nil
+		}
+		if n.Children().Length() > 0 {
+			return inlineToMarkdown(n)
+		}
+		return n.Text(), nil
+	}
+}
+
+func escapeTableCell(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.TrimSpace(s)
+}
+
 // tableToMarkdown は HTML テーブルを GFM テーブルに変換する。
-func tableToMarkdown(s *goquery.Selection) string {
+func tableToMarkdown(s *goquery.Selection) (string, error) {
 	var rows [][]string
+	var convErr error
 	s.Find("tr").Each(func(_ int, tr *goquery.Selection) {
+		if convErr != nil {
+			return
+		}
 		var row []string
-		tr.Find("th,td").Each(func(_ int, cell *goquery.Selection) {
-			row = append(row, strings.TrimSpace(cell.Text()))
+		tr.Find("th, td").Each(func(_ int, cell *goquery.Selection) {
+			if convErr != nil {
+				return
+			}
+			inner, err := inlineToMarkdown(cell)
+			if err != nil {
+				convErr = err
+				return
+			}
+			row = append(row, escapeTableCell(inner))
 		})
 		if len(row) > 0 {
 			rows = append(rows, row)
 		}
 	})
+	if convErr != nil {
+		return "", convErr
+	}
 	if len(rows) == 0 {
-		return ""
+		return "", nil
 	}
 
 	var sb strings.Builder
-	// ヘッダ行
 	sb.WriteString("| " + strings.Join(rows[0], " | ") + " |\n")
-	// セパレータ
 	seps := make([]string, len(rows[0]))
 	for i := range seps {
 		seps[i] = "---"
 	}
 	sb.WriteString("| " + strings.Join(seps, " | ") + " |\n")
-	// データ行
 	for _, row := range rows[1:] {
 		sb.WriteString("| " + strings.Join(row, " | ") + " |\n")
 	}
 	sb.WriteString("\n")
-	return sb.String()
+	return sb.String(), nil
+}
+
+func ensureMacrosPreserved(root *goquery.Selection, markdown string) error {
+	want := countExposedMacros(root)
+	got := len(macroTokenRE.FindAllString(markdown, -1))
+	if want != got {
+		return fmt.Errorf("storage to markdown: %d macro element(s) would be dropped", want-got)
+	}
+	return nil
+}
+
+func countExposedMacros(s *goquery.Selection) int {
+	n := 0
+	s.Children().Each(func(_ int, c *goquery.Selection) {
+		if isMacroTag(goquery.NodeName(c)) {
+			n++
+			return
+		}
+		n += countExposedMacros(c)
+	})
+	return n
 }
 
 // ExtractSection は storage XHTML から指定ヘッダ ID のセクションを抽出する。

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -87,7 +88,7 @@ func TestAllowInsecureFlagReachesClient(t *testing.T) {
 	})
 
 	t.Run("with flag", func(t *testing.T) {
-		cmd := exec.Command(bin, "--allow-insecure", "--json", "ping")
+		cmd := exec.Command(bin, "--insecure-skip-verify", "--json", "ping")
 		cmd.Env = env
 		out, err := cmd.Output()
 		if err != nil {
@@ -108,6 +109,14 @@ func TestAllowInsecureFlagReachesClient(t *testing.T) {
 		}
 		if !resp.Result.OK || resp.Result.ServerVersion != "7.9.18" {
 			t.Fatalf("result: %+v raw %s", resp.Result, out)
+		}
+	})
+
+	t.Run("allow-insecure does not skip tls", func(t *testing.T) {
+		cmd := exec.Command(bin, "--allow-insecure", "--json", "ping")
+		cmd.Env = env
+		if _, err := cmd.Output(); err == nil {
+			t.Fatal("expected TLS verification failure with only --allow-insecure")
 		}
 	})
 }
@@ -163,4 +172,107 @@ func TestPageCreate_RecordsHistory(t *testing.T) {
 	if got.Action != "created" || got.PageID != "99001" || got.Title != "Test Page" || got.SessionID == "" {
 		t.Fatalf("entry: %+v", got)
 	}
+}
+
+func TestPingTextAndUserAgent(t *testing.T) {
+	var ua string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"version": "7.9.18"})
+	}))
+	defer srv.Close()
+
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "ping")
+	cmd.Env = testEnv(srv.URL)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("ping: %v\n%s", err, out)
+	}
+	got := string(out)
+	if strings.Contains(got, "map[") || !strings.Contains(got, "ok "+srv.URL+" server 7.9.18") {
+		t.Fatalf("text ping: %q", got)
+	}
+	if ua != "conflux/dev" {
+		t.Fatalf("User-Agent: %q", ua)
+	}
+}
+
+func TestTimeoutMustBePositive(t *testing.T) {
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "--timeout", "0s", "--json", "version")
+	_, err := cmd.Output()
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("exit: %v", err)
+	}
+}
+
+func TestPageSearch_RejectsBadAfter(t *testing.T) {
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "--json", "page", "search", "--after", "yesterday")
+	cmd.Env = testEnv("https://confluence.example.com")
+	_, err := cmd.Output()
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("exit: %v stderr %s", err, func() string {
+			if exitErr != nil {
+				return string(exitErr.Stderr)
+			}
+			return ""
+		}())
+	}
+}
+
+func TestPageTree_TextIsPreorder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/rest/api/space/TEAM/content/page":
+			_, _ = ioWrite(w, `{"results":[
+				{"id":"20","title":"Second","_links":{"webui":"/p/20"}},
+				{"id":"10","title":"First","_links":{"webui":"/p/10"}}
+			]}`)
+		case "/rest/api/content/20/child/page":
+			_, _ = ioWrite(w, `{"results":[{"id":"15","title":"Child","_links":{"webui":"/p/15"}}]}`)
+		case "/rest/api/content/10/child/page", "/rest/api/content/15/child/page":
+			_, _ = ioWrite(w, `{"results":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "page", "tree", "--space", "TEAM", "--depth", "2")
+	cmd.Env = testEnv(srv.URL)
+	out, err := cmd.Output()
+	if err != nil {
+		stderr := ""
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = string(ee.Stderr)
+		}
+		t.Fatalf("tree: %v\nstderr: %s\nstdout: %s", err, stderr, out)
+	}
+	text := string(out)
+	i10 := strings.Index(text, "10")
+	i20 := strings.Index(text, "20")
+	i15 := strings.Index(text, "15")
+	if i10 < 0 || i20 < 0 || i15 < 0 || !(i10 < i20 && i20 < i15) {
+		t.Fatalf("expected preorder 10, 20, 15:\n%s", text)
+	}
+	if !strings.Contains(text, "\n  15") {
+		t.Fatalf("child should be indented:\n%s", text)
+	}
+}
+
+func ioWrite(w http.ResponseWriter, body string) (int, error) {
+	return w.Write([]byte(body))
 }

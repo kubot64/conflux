@@ -38,7 +38,11 @@ func newSessionID() string {
 
 // newClient は設定から REST API クライアントを生成する。
 func newClient(cfg *config.Config) *client.Client {
-	return client.New(cfg.URL, cfg.Token, cfg.Insecure)
+	return client.New(cfg.URL, cfg.Token, client.Options{
+		AllowInsecureHTTP: cfg.AllowInsecureHTTP,
+		SkipTLSVerify:     cfg.SkipTLSVerify,
+		UserAgent:         fmt.Sprintf("conflux/%s", Version),
+	})
 }
 
 func prepareConfig(cmd *cobra.Command) (*config.Config, error) {
@@ -46,7 +50,8 @@ func prepareConfig(cmd *cobra.Command) (*config.Config, error) {
 	if err != nil {
 		return nil, apperror.New(apperror.KindValidation, err.Error())
 	}
-	cfg.Insecure = cfg.Insecure || allowInsecureFlag
+	cfg.AllowInsecureHTTP = cfg.AllowInsecureHTTP || allowInsecureFlag
+	cfg.SkipTLSVerify = cfg.SkipTLSVerify || skipTLSVerifyFlag
 	if !skipsRemoteConfig(cmd) {
 		if err := cfg.Validate(); err != nil {
 			return nil, apperror.New(apperror.KindValidation, err.Error())
