@@ -26,7 +26,7 @@ jobs:
           cache: true
 
       - name: Generate SBOM
-        run: go tool cyclonedx-gomod mod -licenses -json -output sbom.cdx.json
+        run: go tool cyclonedx-gomod app -licenses -json -output sbom.cdx.json
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
