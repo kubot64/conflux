@@ -92,6 +92,12 @@ func (l *Logger) save(hf *historyFile) error {
 
 // Log はエントリを history.json に記録する。
 func (l *Logger) Log(entry port.HistoryEntry) error {
+	unlock, err := fileutil.Lock(l.path() + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	hf, err := l.load()
 	if err != nil {
 		return err

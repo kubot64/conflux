@@ -138,15 +138,16 @@ var attachmentDownloadCmd = &cobra.Command{
 
 		c := newClient(cfg)
 
-		// --output 未指定時は API でファイル名を取得
+		// --output 未指定時は API のファイル名のベース名だけを使う。
+		// 絶対パスや ../ をそのまま書くと、作業ディレクトリの外へ出る。
 		destFilename := attachmentDownloadOutputFlag
 		if destFilename == "" {
 			meta, err := c.GetAttachment(cmd.Context(), attachmentID)
 			if err != nil {
 				return err
 			}
-			destFilename = meta.Filename
-			if destFilename == "" {
+			destFilename = filepath.Base(meta.Filename)
+			if destFilename == "" || destFilename == "." || destFilename == ".." || destFilename == string(filepath.Separator) {
 				destFilename = attachmentID
 			}
 		}
@@ -166,27 +167,15 @@ var attachmentDownloadCmd = &cobra.Command{
 		}
 		defer rc.Close()
 
-		var out io.Writer
 		if destFilename == "-" {
-			out = os.Stdout
-		} else {
-			// 添付内容は機密の可能性があるため、umask 依存の 0666 ではなく
-			// 所有者のみ読み書き可能 (0600) を明示する。
-			f, err := os.OpenFile(destFilename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-			if err != nil {
-				return apperror.New(apperror.KindServer, fmt.Sprintf("create file: %v", err))
+			if _, err := io.Copy(os.Stdout, rc); err != nil {
+				return apperror.New(apperror.KindServer, fmt.Sprintf("download failed: %v", err))
 			}
-			defer f.Close()
-			// OpenFile のモードはファイル新規作成時のみ適用される。既存ファイルへ
-			// 上書きするケースで過去に緩いパーミッションが付いていた場合に備え、
-			// 明示的に 0600 へ chmod する。
-			if err := f.Chmod(0o600); err != nil {
-				return apperror.New(apperror.KindServer, fmt.Sprintf("chmod file: %v", err))
-			}
-			out = f
+			return nil
 		}
-
-		if _, err := io.Copy(out, rc); err != nil {
+		// 一時ファイルへ書いてから rename する。途中失敗で宛先を壊さず、
+		// 既存のシンボリックリンク先も上書きしない。
+		if err := writeDownloadFile(destFilename, rc); err != nil {
 			return apperror.New(apperror.KindServer, fmt.Sprintf("download failed: %v", err))
 		}
 
@@ -195,6 +184,43 @@ var attachmentDownloadCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+func writeDownloadFile(dest string, r io.Reader) error {
+	dir := filepath.Dir(dest)
+	if dir == "" {
+		dir = "."
+	}
+	f, err := os.CreateTemp(dir, ".conflux-download-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	done := false
+	defer func() {
+		if !done {
+			f.Close()
+			os.Remove(tmp)
+		}
+	}()
+	if _, err := io.Copy(f, r); err != nil {
+		return err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	done = true
+	return nil
 }
 
 func init() {

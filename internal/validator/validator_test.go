@@ -61,6 +61,26 @@ func TestTitle(t *testing.T) {
 	}
 }
 
+func TestISODate(t *testing.T) {
+	tests := []struct {
+		in      string
+		wantErr bool
+	}{
+		{"", false},
+		{"2024-01-31", false},
+		{"2024-1-01", true},
+		{"2024-13-01", true},
+		{"01-02-2024", true},
+		{"2024-01-01T00:00:00Z", true},
+	}
+	for _, tt := range tests {
+		err := validator.ISODate(tt.in)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ISODate(%q): wantErr=%v, got %v", tt.in, tt.wantErr, err)
+		}
+	}
+}
+
 func TestSpaceKey(t *testing.T) {
 	tests := []struct {
 		key     string

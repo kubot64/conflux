@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/kubot64/conflux/internal/apperror"
@@ -37,6 +39,9 @@ var pageSearchCmd = &cobra.Command{
 		keyword := ""
 		if len(args) > 0 {
 			keyword = args[0]
+		}
+		if err := validator.ISODate(pageSearchAfterFlag); err != nil {
+			return apperror.New(apperror.KindValidation, err.Error())
 		}
 		space := pageSearchSpaceFlag
 		if space == "" {
@@ -125,18 +130,18 @@ var pageGetCmd = &cobra.Command{
 		}
 
 		results := []pageResult{}
-		var errors []pageError
+		var failures []pageFailure
 
 		for _, id := range args {
 			page, err := c.GetPage(cmd.Context(), id)
 			if err != nil {
-				errors = append(errors, pageError{ID: id, Error: err.Error()})
+				failures = append(failures, pageFailure{ID: id, Err: err})
 				continue
 			}
 
 			body, err := formatBody(conv, page.StorageBody, pageGetFormatFlag, pageGetSectionFlag)
 			if err != nil {
-				errors = append(errors, pageError{ID: id, Error: err.Error()})
+				failures = append(failures, pageFailure{ID: id, Err: err})
 				continue
 			}
 
@@ -155,9 +160,16 @@ var pageGetCmd = &cobra.Command{
 		}
 
 		w := newWriter()
+		if len(results) == 0 && len(failures) > 0 {
+			return aggregatePageErrors(failures)
+		}
+		pageErrors := make([]pageError, len(failures))
+		for i, f := range failures {
+			pageErrors[i] = pageError{ID: f.ID, Error: f.Err.Error()}
+		}
 		if jsonFlag {
-			if len(errors) > 0 {
-				return w.WriteWithErrors("page get", results, errors)
+			if len(pageErrors) > 0 {
+				return w.WriteWithErrors("page get", results, pageErrors)
 			}
 			return w.Write("page get", results)
 		}
@@ -165,11 +177,48 @@ var pageGetCmd = &cobra.Command{
 		for _, p := range results {
 			fmt.Printf("=== %s (%s) ===\n%s\n\n", p.Title, p.ID, p.Body)
 		}
-		for _, e := range errors {
-			fmt.Printf("ERROR [%s]: %s\n", e.ID, e.Error)
+		for _, e := range pageErrors {
+			fmt.Fprintf(os.Stderr, "ERROR [%s]: %s\n", e.ID, e.Error)
 		}
 		return nil
 	},
+}
+
+type pageFailure struct {
+	ID  string
+	Err error
+}
+
+func aggregatePageErrors(failures []pageFailure) error {
+	if len(failures) == 1 {
+		return failures[0].Err
+	}
+	kind := apperror.KindValidation
+	best := apperror.ExitValidation
+	same := true
+	var first *apperror.AppError
+	var msgs []string
+	for _, f := range failures {
+		msgs = append(msgs, f.ID+": "+f.Err.Error())
+		var ae *apperror.AppError
+		if !errors.As(f.Err, &ae) {
+			same = false
+			continue
+		}
+		if first == nil {
+			first = ae
+		} else if ae.Kind != first.Kind {
+			same = false
+		}
+		if ae.Code() >= best {
+			best = ae.Code()
+			kind = ae.Kind
+		}
+	}
+	if same && first != nil {
+		kind = first.Kind
+	}
+	return apperror.New(kind, strings.Join(msgs, "; "))
 }
 
 // formatBody は指定フォーマットでページ本文を変換する。
@@ -251,15 +300,34 @@ var pageTreeCmd = &cobra.Command{
 		if jsonFlag {
 			return w.Write("page tree", result)
 		}
-		for _, n := range nodes {
-			indent := ""
-			for j := 0; j < n.Depth; j++ {
-				indent += "  "
-			}
-			fmt.Printf("%s%-10s %s\n", indent, n.ID, n.Title)
-		}
+		writePageTreeText(nodes)
 		return nil
 	},
+}
+
+func writePageTreeText(nodes []port.PageTreeNode) {
+	children := map[string][]port.PageTreeNode{}
+	var roots []port.PageTreeNode
+	for _, n := range nodes {
+		if n.ParentID == nil || *n.ParentID == "" {
+			roots = append(roots, n)
+			continue
+		}
+		children[*n.ParentID] = append(children[*n.ParentID], n)
+	}
+	sort.Slice(roots, func(i, j int) bool { return roots[i].ID < roots[j].ID })
+	var walk func(port.PageTreeNode)
+	walk = func(n port.PageTreeNode) {
+		fmt.Printf("%s%-10s %s\n", strings.Repeat("  ", n.Depth), n.ID, n.Title)
+		kids := children[n.ID]
+		sort.Slice(kids, func(i, j int) bool { return kids[i].ID < kids[j].ID })
+		for _, k := range kids {
+			walk(k)
+		}
+	}
+	for _, r := range roots {
+		walk(r)
+	}
 }
 
 var (
@@ -286,8 +354,9 @@ var pageCreateCmd = &cobra.Command{
 		}
 
 		title := pageCreateTitleFlag
+		body := markdown
 		if title == "" {
-			title = extractTitleFromMarkdown(markdown)
+			title, body = extractTitleFromMarkdown(markdown)
 		}
 		if title == "" {
 			return apperror.New(apperror.KindValidation, "title required: use --title or add '# Heading' to the file")
@@ -313,7 +382,7 @@ var pageCreateCmd = &cobra.Command{
 		}
 
 		conv := converter.New()
-		storageBody, err := conv.MarkdownToStorage(markdown)
+		storageBody, err := conv.MarkdownToStorage(body)
 		if err != nil {
 			return apperror.New(apperror.KindValidation, fmt.Sprintf("markdown convert: %v", err))
 		}
@@ -460,14 +529,18 @@ func readMarkdownInput(args []string) (string, error) {
 	return string(data), nil
 }
 
-// extractTitleFromMarkdown は Markdown の先頭 `# Heading` からタイトルを取得する。
-func extractTitleFromMarkdown(markdown string) string {
-	for _, line := range strings.Split(markdown, "\n") {
+// extractTitleFromMarkdown は最初の `# Heading` をタイトルにし、その行を本文から除く。
+func extractTitleFromMarkdown(markdown string) (string, string) {
+	lines := strings.Split(markdown, "\n")
+	for i, line := range lines {
 		if strings.HasPrefix(line, "# ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "# "))
+			title := strings.TrimSpace(strings.TrimPrefix(line, "# "))
+			rest := append(append([]string{}, lines[:i]...), lines[i+1:]...)
+			body := strings.TrimLeft(strings.Join(rest, "\n"), "\r\n")
+			return title, body
 		}
 	}
-	return ""
+	return "", markdown
 }
 
 var (

@@ -17,8 +17,10 @@ type Config struct {
 	// Timeout は CONFLUENCE_CLI_TIMEOUT の値。未指定時は 0（未設定を意味する）。
 	// タイムアウトの優先順位解決（--timeout フラグ > env > デフォルト 30s）は cmd/root.go の責務。
 	Timeout time.Duration
-	// Insecure は http:// の使用を許可するかどうか。
-	Insecure bool
+	// AllowInsecureHTTP は http:// の使用を許可する。
+	AllowInsecureHTTP bool
+	// SkipTLSVerify は TLS 証明書の検証を省略する。
+	SkipTLSVerify bool
 }
 
 // Load は環境変数から Config を読み込む。
@@ -45,13 +47,19 @@ func Load() (*Config, error) {
 	}
 
 	if os.Getenv("CONFLUENCE_ALLOW_INSECURE") == "true" {
-		cfg.Insecure = true
+		cfg.AllowInsecureHTTP = true
+	}
+	if os.Getenv("CONFLUENCE_INSECURE_SKIP_VERIFY") == "true" {
+		cfg.SkipTLSVerify = true
 	}
 
 	if raw := os.Getenv("CONFLUENCE_CLI_TIMEOUT"); raw != "" {
 		d, err := time.ParseDuration(raw)
 		if err != nil {
 			return nil, fmt.Errorf("CONFLUENCE_CLI_TIMEOUT: %w", err)
+		}
+		if d <= 0 {
+			return nil, fmt.Errorf("CONFLUENCE_CLI_TIMEOUT must be > 0")
 		}
 		cfg.Timeout = d
 	}
@@ -80,7 +88,7 @@ func (cfg *Config) Validate() error {
 	if cfg.URL == "" {
 		return fmt.Errorf("CONFLUENCE_URL is not set")
 	}
-	if !cfg.Insecure && !strings.HasPrefix(cfg.URL, "https://") {
+	if !cfg.AllowInsecureHTTP && !strings.HasPrefix(cfg.URL, "https://") {
 		return fmt.Errorf("insecure URL: CONFLUENCE_URL must start with https:// (or use --allow-insecure)")
 	}
 	if cfg.Token == "" {

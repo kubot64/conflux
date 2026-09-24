@@ -3,6 +3,7 @@ package output_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -69,6 +70,25 @@ func TestWriteError_JSON(t *testing.T) {
 	}
 	if errField["message"] != "page 12345 not found" {
 		t.Errorf("message: got %v", errField["message"])
+	}
+}
+
+func TestWriteError_JSON_Wrapped(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	w := output.New(true)
+	w.Out = &out
+	w.Err = &errBuf
+
+	wrapped := fmt.Errorf("context: %w", apperror.New(apperror.KindNotFound, "page missing"))
+	w.WriteError("page get", wrapped)
+
+	var got map[string]any
+	if err := json.Unmarshal(errBuf.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	errField := got["error"].(map[string]any)
+	if errField["kind"] != "not_found" || errField["code"] != float64(4) {
+		t.Fatalf("wrapped error lost kind: %+v", errField)
 	}
 }
 

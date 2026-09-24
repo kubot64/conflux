@@ -64,6 +64,35 @@ func TestLoad_InvalidTimeout(t *testing.T) {
 	}
 }
 
+func TestLoad_NonPositiveTimeout(t *testing.T) {
+	t.Setenv("CONFLUENCE_CLI_TIMEOUT", "0s")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("expected error for zero timeout")
+	}
+}
+
+func TestLoad_SkipTLSVerifySeparateFromAllowInsecure(t *testing.T) {
+	t.Setenv("CONFLUENCE_CLI_TIMEOUT", "")
+	t.Setenv("CONFLUENCE_ALLOW_INSECURE", "true")
+	t.Setenv("CONFLUENCE_INSECURE_SKIP_VERIFY", "")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AllowInsecureHTTP || cfg.SkipTLSVerify {
+		t.Fatalf("allow=%v skip=%v", cfg.AllowInsecureHTTP, cfg.SkipTLSVerify)
+	}
+
+	t.Setenv("CONFLUENCE_INSECURE_SKIP_VERIFY", "true")
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SkipTLSVerify {
+		t.Fatal("expected SkipTLSVerify")
+	}
+}
+
 func TestLoad_TokenFile_Mode0600_OK(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX file modes are not meaningful on Windows")

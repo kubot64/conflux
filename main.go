@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -25,12 +26,20 @@ func setupLogger() {
 
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to open log file: %v\n", err)
 		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 		return
 	}
 
-	// トークンを取得してマスキング対象とする
+	// トークンを取得してマスキング対象とする。ファイル指定も対象にする。
 	token := os.Getenv("CONFLUENCE_TOKEN")
+	if token == "" {
+		if path := os.Getenv("CONFLUENCE_TOKEN_FILE"); path != "" {
+			if data, err := os.ReadFile(path); err == nil {
+				token = strings.TrimSpace(string(data))
+			}
+		}
+	}
 
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelDebug,
@@ -50,7 +59,6 @@ func setupLogger() {
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(f, opts)))
 }
-
 
 func run() int {
 	if err := cmd.Execute(); err != nil {

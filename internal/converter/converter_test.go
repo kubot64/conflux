@@ -276,3 +276,66 @@ func TestExtractSection_NotFound(t *testing.T) {
 		t.Fatal("expected error for missing section, got nil")
 	}
 }
+
+func TestStorageToMarkdown_HeadingKeepsInline(t *testing.T) {
+	c := newConverter()
+	out, err := c.StorageToMarkdown(`<h2>Hello <strong>world</strong></h2>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "## Hello **world**") {
+		t.Fatalf("heading dropped inline mark: %s", out)
+	}
+}
+
+func TestStorageToMarkdown_NestedList(t *testing.T) {
+	c := newConverter()
+	out, err := c.StorageToMarkdown(`<ul><li>a<ul><li>b</li></ul></li></ul>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "- a\n  - b") {
+		t.Fatalf("nested list flattened: %q", out)
+	}
+}
+
+func TestStorageToMarkdown_CodeLanguage(t *testing.T) {
+	c := newConverter()
+	out, err := c.StorageToMarkdown(`<pre><code class="language-go">fmt.Println()</code></pre>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "```go\nfmt.Println()") {
+		t.Fatalf("code language dropped: %q", out)
+	}
+}
+
+func TestStorageToMarkdown_TableKeepsCellMarkup(t *testing.T) {
+	c := newConverter()
+	out, err := c.StorageToMarkdown(`<table><tr><th>a|b</th></tr><tr><td><strong>c</strong></td></tr></table>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `a\|b`) || !strings.Contains(out, "**c**") {
+		t.Fatalf("table cell lost markup or pipe: %q", out)
+	}
+}
+
+func TestMacroInsideParagraph_RoundTrip(t *testing.T) {
+	c := newConverter()
+	storage := `<p>before <ac:structured-macro ac:name="status"></ac:structured-macro> after</p>`
+	md, err := c.StorageToMarkdown(storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(md, "conflux-macro:") || !strings.Contains(md, "before") || !strings.Contains(md, "after") {
+		t.Fatalf("inline macro dropped: %s", md)
+	}
+	back, err := c.MarkdownToStorage(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(back, `ac:name="status"`) {
+		t.Fatalf("inline macro not restored: %s\nmarkdown: %s", back, md)
+	}
+}
