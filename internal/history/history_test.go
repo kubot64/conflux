@@ -3,7 +3,9 @@ package history_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -206,6 +208,34 @@ func TestLog_RedactCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestLog_ConcurrentNoLostUpdates(t *testing.T) {
+	logger, _ := newLogger(t)
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := logger.Log(port.HistoryEntry{
+				Action: "created",
+				PageID: strconv.Itoa(i),
+				Title:  "t",
+				Space:  "DEV",
+			}); err != nil {
+				t.Errorf("log %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	entries, err := logger.List("", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != n {
+		t.Fatalf("entries: got %d, want %d", len(entries), n)
+	}
+}
+
 func TestLog_Atomic_NoPredictableTmp(t *testing.T) {
 	logger, dir := newLogger(t)
 	_ = logger.Log(port.HistoryEntry{SessionID: "s", Action: "created", PageID: "1", Space: "DEV"})
@@ -219,7 +249,7 @@ func TestLog_Atomic_NoPredictableTmp(t *testing.T) {
 	// ランダム名の一時ファイルも残っていないこと
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if e.Name() != "history.json" {
+		if e.Name() != "history.json" && e.Name() != "history.json.lock" {
 			t.Errorf("unexpected file in dir: %s", e.Name())
 		}
 	}

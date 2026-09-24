@@ -246,4 +246,75 @@ func TestAttachmentDownload(t *testing.T) {
 			t.Errorf("stdout should contain only file content, got %q", string(all))
 		}
 	})
+
+	t.Run("api filename cannot escape cwd", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.Contains(r.URL.Path, "/rest/api/content/att-001"):
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"att-001","title":"../../etc/passwd","extensions":{"mediaType":"text/plain","fileSize":4},"_links":{"download":"/dl"}}`))
+			case r.URL.Path == "/dl":
+				_, _ = w.Write([]byte("safe"))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+
+		dir := t.TempDir()
+		cmd := exec.Command(bin, "attachment", "download", "att-001")
+		cmd.Dir = dir
+		cmd.Env = testEnv(srv.URL)
+		if out, err := cmd.Output(); err != nil {
+			t.Fatalf("download: %v\n%s", err, out)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Name() != "passwd" {
+			names := make([]string, len(entries))
+			for i, e := range entries {
+				names[i] = e.Name()
+			}
+			t.Fatalf("files: %v", names)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, "passwd"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "safe" {
+			t.Fatalf("content: %q", got)
+		}
+	})
+
+	t.Run("does not follow symlink at destination", func(t *testing.T) {
+		srv := httptest.NewServer(attachmentAPIHandler(t))
+		defer srv.Close()
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target")
+		if err := os.WriteFile(target, []byte("original"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(dir, "link")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(bin, "attachment", "download", "--output", link, "att-001")
+		cmd.Env = testEnv(srv.URL)
+		if out, err := cmd.Output(); err != nil {
+			t.Fatalf("download: %v\n%s", err, out)
+		}
+		info, err := os.Lstat(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			t.Fatal("destination symlink was followed or left in place")
+		}
+		got, _ := os.ReadFile(target)
+		if string(got) != "original" {
+			t.Fatalf("symlink target was overwritten: %q", got)
+		}
+	})
 }

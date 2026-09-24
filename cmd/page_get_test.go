@@ -1,6 +1,7 @@
 package cmd_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -124,12 +125,6 @@ func TestPageGet_PartialFailure(t *testing.T) {
 			wantResults: 1,
 			wantErrors:  0,
 		},
-		{
-			name:        "all not-found",
-			ids:         []string{"999", "888"},
-			wantResults: 0,
-			wantErrors:  2,
-		},
 	}
 
 	for _, tt := range tests {
@@ -139,7 +134,7 @@ func TestPageGet_PartialFailure(t *testing.T) {
 			cmd.Env = testEnv(srv.URL)
 
 			out, err := cmd.Output()
-			// exit code は常に 0 であること（部分失敗でも exit 0）
+			// 一部でも成功すれば exit 0。失敗分は errors[] に入る。
 			if err != nil {
 				t.Fatalf("expected exit 0, got error: %v\nstdout: %s", err, out)
 			}
@@ -205,5 +200,61 @@ func TestPageGet_PartialFailure(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPageGet_AllFailExitCode(t *testing.T) {
+	srv := httptest.NewServer(pageAPIHandler(t, map[string]bool{}))
+	defer srv.Close()
+	bin := buildBinary(t)
+
+	cmd := exec.Command(bin, "page", "get", "--json", "999", "888")
+	cmd.Env = testEnv(srv.URL)
+	_, err := cmd.Output()
+	if err == nil {
+		t.Fatal("expected non-zero exit when every page fails")
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatal(err)
+	}
+	if exitErr.ExitCode() != 4 {
+		t.Fatalf("exit %d, stderr %s", exitErr.ExitCode(), exitErr.Stderr)
+	}
+	var resp struct {
+		Error struct {
+			Kind string `json:"kind"`
+			Code int    `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(exitErr.Stderr, &resp); err != nil {
+		t.Fatalf("stderr: %v\n%s", err, exitErr.Stderr)
+	}
+	if resp.Error.Kind != "not_found" || resp.Error.Code != 4 {
+		t.Fatalf("error envelope: %+v", resp.Error)
+	}
+}
+
+func TestPageGet_TextErrorsGoToStderr(t *testing.T) {
+	srv := httptest.NewServer(pageAPIHandler(t, map[string]bool{"123": true}))
+	defer srv.Close()
+	bin := buildBinary(t)
+
+	cmd := exec.Command(bin, "page", "get", "123", "999")
+	cmd.Env = testEnv(srv.URL)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("partial success should exit 0: %v\nstderr: %s", err, stderr.String())
+	}
+	if strings.Contains(string(out), "ERROR") {
+		t.Fatalf("errors leaked to stdout: %s", out)
+	}
+	if !strings.Contains(string(out), "Page 123") {
+		t.Fatalf("stdout missing page: %s", out)
+	}
+	if !strings.Contains(stderr.String(), "ERROR [999]") {
+		t.Fatalf("stderr: %s", stderr.String())
 	}
 }

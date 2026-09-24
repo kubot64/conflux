@@ -3,20 +3,23 @@ package client_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kubot64/conflux/internal/apperror"
 	"github.com/kubot64/conflux/internal/client"
 )
 
 func newTestClient(t *testing.T, srv *httptest.Server) *client.Client {
 	t.Helper()
-	return client.New(srv.URL, "test-token", true)
+	return client.New(srv.URL, "test-token", client.Options{AllowInsecureHTTP: true})
 }
 
 // --- リトライ: GET は 429/5xx で再試行 ---
@@ -244,7 +247,7 @@ func TestGetPage(t *testing.T) {
 
 func TestNew_TLSMinVersion(t *testing.T) {
 	// insecure=false の場合、TLS 1.2 未満は拒否される
-	c := client.New("https://localhost:1", "token", false)
+	c := client.New("https://localhost:1", "token", client.Options{})
 	tr := client.GetTransport(c)
 	if tr == nil {
 		t.Fatal("expected explicit Transport, got nil")
@@ -262,7 +265,7 @@ func TestNew_TLSMinVersion(t *testing.T) {
 }
 
 func TestNew_TransportTimeouts(t *testing.T) {
-	c := client.New("https://localhost:1", "token", false)
+	c := client.New("https://localhost:1", "token", client.Options{})
 	tr := client.GetTransport(c)
 	if tr == nil {
 		t.Fatal("expected explicit Transport, got nil")
@@ -296,15 +299,21 @@ func TestResponseHeaderTimeout_TripsOnSlowHeaders(t *testing.T) {
 	defer srv.Close()
 	defer close(block)
 
-	c := client.NewWithResponseHeaderTimeout(srv.URL, "test-token", true, 100*time.Millisecond)
+	restore := client.SetBackoffBase(time.Millisecond)
+	defer restore()
+	c := client.NewWithResponseHeaderTimeout(srv.URL, "test-token", client.Options{}, 100*time.Millisecond)
 	_, err := c.ListSpaces(context.Background())
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
+	var ae *apperror.AppError
+	if !errors.As(err, &ae) || ae.Kind != apperror.KindTimeout {
+		t.Fatalf("expected timeout kind, got %v", err)
+	}
 }
 
 func TestNew_InsecureMode(t *testing.T) {
-	c := client.New("https://localhost:1", "token", true)
+	c := client.New("https://localhost:1", "token", client.Options{SkipTLSVerify: true})
 	tr := client.GetTransport(c)
 	if tr == nil {
 		t.Fatal("expected explicit Transport, got nil")
@@ -396,29 +405,48 @@ func TestListSpaces_FollowsNext(t *testing.T) {
 
 func TestGetPageTree_PaginatesAndOrdersByDepth(t *testing.T) {
 	var srv *httptest.Server
+	grandchildHits := 0
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Query().Get("start") == "1" {
-			fmt.Fprintf(w, `{"results":[{"id":"1","title":"Root","ancestors":[],"_links":{"webui":"/pages/1"}}],"_links":{"base":"%s"}}`, srv.URL)
-			return
+		switch {
+		case r.URL.Path == "/rest/api/space/TEAM/content/page":
+			if r.URL.Query().Get("start") == "1" {
+				fmt.Fprintf(w, `{"results":[{"id":"3","title":"Other","_links":{"webui":"/pages/3"}}],"_links":{"base":"%s"}}`, srv.URL)
+				return
+			}
+			fmt.Fprintf(w, `{"results":[{"id":"1","title":"Root","_links":{"webui":"/pages/1"}}],"_links":{"base":"%s","next":"%s/rest/api/space/TEAM/content/page?depth=root&start=1"}}`, srv.URL, srv.URL)
+		case r.URL.Path == "/rest/api/content/1/child/page":
+			fmt.Fprintf(w, `{"results":[{"id":"2","title":"Child","_links":{"webui":"/pages/2"}}],"_links":{"base":"%s"}}`, srv.URL)
+		case r.URL.Path == "/rest/api/content/2/child/page":
+			grandchildHits++
+			fmt.Fprintf(w, `{"results":[{"id":"9","title":"Grand","_links":{"webui":"/pages/9"}}],"_links":{"base":"%s"}}`, srv.URL)
+		case r.URL.Path == "/rest/api/content/3/child/page":
+			fmt.Fprintf(w, `{"results":[],"_links":{"base":"%s"}}`, srv.URL)
+		default:
+			http.NotFound(w, r)
 		}
-		fmt.Fprintf(w, `{"results":[{"id":"2","title":"Child","ancestors":[{"id":"1"}],"_links":{"webui":"/pages/2"}}],"_links":{"next":"%s/rest/api/content?start=1","base":"%s"}}`, srv.URL, srv.URL)
 	}))
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	nodes, err := c.GetPageTree(context.Background(), "TEAM", 3)
+	nodes, err := c.GetPageTree(context.Background(), "TEAM", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(nodes) != 2 {
-		t.Fatalf("nodes: got %d, want 2", len(nodes))
+	if grandchildHits != 0 {
+		t.Fatalf("depth 1 must not fetch grandchildren, hits %d", grandchildHits)
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("nodes: got %d, want 3", len(nodes))
 	}
 	if nodes[0].Depth != 0 || nodes[0].ID != "1" {
-		t.Fatalf("first node should be root, got %+v", nodes[0])
+		t.Fatalf("first node should be root 1, got %+v", nodes[0])
 	}
-	if nodes[1].Depth != 1 || nodes[1].ParentID == nil || *nodes[1].ParentID != "1" {
-		t.Fatalf("second node should be child, got %+v", nodes[1])
+	if nodes[1].Depth != 0 || nodes[1].ID != "3" {
+		t.Fatalf("second node should be root 3, got %+v", nodes[1])
+	}
+	if nodes[2].Depth != 1 || nodes[2].ParentID == nil || *nodes[2].ParentID != "1" {
+		t.Fatalf("third node should be child of 1, got %+v", nodes[2])
 	}
 }
 
@@ -474,5 +502,248 @@ func TestDownloadAttachment_RejectsOtherHost(t *testing.T) {
 	}
 	if gotAuth != "" {
 		t.Fatalf("token was sent to another host: %q", gotAuth)
+	}
+}
+
+func TestDownloadAttachment_RejectsOffHostRedirect(t *testing.T) {
+	var gotAuth string
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, "stolen")
+	}))
+	defer evil.Close()
+
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/api/content/att-9":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":"att-9","title":"a.txt","extensions":{"mediaType":"text/plain","fileSize":1},"_links":{"download":"/dl"}}`)
+		case "/dl":
+			http.Redirect(w, r, evil.URL+"/steal", http.StatusFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer good.Close()
+
+	c := newTestClient(t, good)
+	if _, err := c.DownloadAttachment(context.Background(), "att-9"); err == nil {
+		t.Fatal("expected redirect to another host to fail")
+	}
+	if gotAuth != "" {
+		t.Fatalf("token was sent to another host via redirect: %q", gotAuth)
+	}
+}
+
+func TestListAttachments_FollowsNext(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("start") == "1" {
+			fmt.Fprintf(w, `{"results":[{"id":"b","title":"b.txt","extensions":{"mediaType":"text/plain","fileSize":2},"_links":{"download":"/b"}}],"_links":{"base":"%s"}}`, srv.URL)
+			return
+		}
+		fmt.Fprintf(w, `{"results":[{"id":"a","title":"a.txt","extensions":{"mediaType":"text/plain","fileSize":1},"_links":{"download":"/a"}}],"_links":{"base":"%s","next":"%s/rest/api/content/1/child/attachment?start=1"}}`, srv.URL, srv.URL)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	atts, err := c.ListAttachments(context.Background(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(atts) != 2 || atts[0].ID != "a" || atts[1].ID != "b" {
+		t.Fatalf("attachments: %+v", atts)
+	}
+}
+
+func TestPost_StatusMapping(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		kind   apperror.ErrorKind
+		code   int
+	}{
+		{"bad request", http.StatusBadRequest, apperror.KindValidation, 1},
+		{"conflict", http.StatusConflict, apperror.KindConflict, 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+			c := newTestClient(t, srv)
+			_, err := c.UpdatePage(context.Background(), "1", 2, "T", "<p>x</p>")
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			var ae *apperror.AppError
+			if !errors.As(err, &ae) {
+				t.Fatalf("got %v", err)
+			}
+			if ae.Kind != tt.kind || int(ae.Code()) != tt.code {
+				t.Fatalf("kind %s code %d, want %s/%d (%s)", ae.Kind, ae.Code(), tt.kind, tt.code, ae.Error())
+			}
+			if strings.Contains(ae.Error(), fmt.Sprintf("%d", tt.status)) {
+				t.Fatalf("message leaked status: %s", ae.Error())
+			}
+		})
+	}
+}
+
+func TestGet_RetriesTransientNetworkError(t *testing.T) {
+	restore := client.SetBackoffBase(time.Millisecond)
+	defer restore()
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("hijack unsupported")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	if _, err := c.ListSpaces(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts: got %d, want 3", attempts)
+	}
+}
+
+func TestPost_NoRetryOnNetworkError(t *testing.T) {
+	restore := client.SetBackoffBase(time.Millisecond)
+	defer restore()
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		attempts++
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("hijack unsupported")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	if _, err := c.CreatePage(context.Background(), "DEV", "T", "<p>x</p>"); err == nil {
+		t.Fatal("expected error")
+	}
+	if attempts != 1 {
+		t.Fatalf("POST network error should not retry: attempts %d", attempts)
+	}
+}
+
+func TestUploadAttachment_RejectsOversize(t *testing.T) {
+	restore := client.SetMaxUploadBytes(4)
+	defer restore()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("server should not receive an oversized upload")
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	_, err := c.UploadAttachment(context.Background(), "1", "a.txt", strings.NewReader("0123456789"))
+	if err == nil {
+		t.Fatal("expected size error")
+	}
+	var ae *apperror.AppError
+	if !errors.As(err, &ae) || ae.Kind != apperror.KindValidation {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestUploadAttachment_StreamsFile(t *testing.T) {
+	const payload = "streamed-bytes"
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		f, hdr, err := r.FormFile("file")
+		if err != nil {
+			t.Errorf("form file: %v", err)
+			return
+		}
+		defer f.Close()
+		b, _ := io.ReadAll(f)
+		got = hdr.Filename + ":" + string(b)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"results":[{"id":"att","title":"%s","extensions":{"mediaType":"text/plain","fileSize":%d},"_links":{"download":"/d"}}]}`, hdr.Filename, len(b))
+	}))
+	defer srv.Close()
+
+	f, err := os.CreateTemp(t.TempDir(), "up-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	c := newTestClient(t, srv)
+	att, err := c.UploadAttachment(context.Background(), "9", "note.txt", f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if att.Filename != "note.txt" || got != "note.txt:"+payload {
+		t.Fatalf("upload: att=%+v body=%q", att, got)
+	}
+}
+
+func TestRead_RejectsHugeResponse(t *testing.T) {
+	restore := client.SetMaxResponseBytes(8)
+	defer restore()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"results":[{"key":"THIS-IS-TOO-LONG"}]}`)
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+	if _, err := c.ListSpaces(context.Background()); err == nil {
+		t.Fatal("expected response size error")
+	}
+}
+
+func TestUserAgentDefault(t *testing.T) {
+	var ua string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+	if _, err := c.ListSpaces(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if ua != "conflux/dev" {
+		t.Fatalf("User-Agent: got %q", ua)
 	}
 }

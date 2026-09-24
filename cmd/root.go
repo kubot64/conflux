@@ -17,6 +17,7 @@ var (
 	jsonFlag          bool
 	timeoutFlag       string
 	allowInsecureFlag bool
+	skipTLSVerifyFlag bool
 )
 
 var rootCmd = &cobra.Command{
@@ -40,6 +41,9 @@ var rootCmd = &cobra.Command{
 			d, err := time.ParseDuration(timeoutFlag)
 			if err != nil {
 				return apperror.New(apperror.KindValidation, fmt.Sprintf("--timeout: %v", err))
+			}
+			if d <= 0 {
+				return apperror.New(apperror.KindValidation, "--timeout must be > 0")
 			}
 			timeout = d
 		}
@@ -74,6 +78,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "JSON 形式で出力する")
 	rootCmd.PersistentFlags().StringVar(&timeoutFlag, "timeout", "", "コマンドタイムアウト（例: 30s, 2m）")
 	rootCmd.PersistentFlags().BoolVar(&allowInsecureFlag, "allow-insecure", false, "http:// の使用を許可する")
+	rootCmd.PersistentFlags().BoolVar(&skipTLSVerifyFlag, "insecure-skip-verify", false, "TLS 証明書の検証を省略する")
 }
 
 // newWriter は --json フラグに基づいて output.Writer を生成する。

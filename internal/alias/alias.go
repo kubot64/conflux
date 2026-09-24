@@ -54,6 +54,12 @@ func (s *Store) save(records []aliasRecord) error {
 
 // Set はエイリアスを追加または更新する。
 func (s *Store) Set(name, target string, t port.AliasType) error {
+	unlock, err := fileutil.Lock(s.path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	records, err := s.load()
 	if err != nil {
 		return err
@@ -98,6 +104,12 @@ func (s *Store) List() ([]port.Alias, error) {
 
 // Delete はエイリアスを削除する。存在しない場合は KindNotFound エラーを返す。
 func (s *Store) Delete(name string) error {
+	unlock, err := fileutil.Lock(s.path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	records, err := s.load()
 	if err != nil {
 		return err

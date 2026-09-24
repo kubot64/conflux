@@ -6,9 +6,9 @@ import (
 
 // ビルド時に ldflags で埋め込む。
 var (
-	Version   = "dev"
-	Commit    = "unknown"
-	BuiltAt   = "unknown"
+	Version = "dev"
+	Commit  = "unknown"
+	BuiltAt = "unknown"
 )
 
 var versionCmd = &cobra.Command{

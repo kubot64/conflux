@@ -207,3 +207,52 @@ func TestPageCreate_IfExists(t *testing.T) {
 		})
 	}
 }
+
+func TestPageCreate_StripsTitleHeading(t *testing.T) {
+	var storage string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/rest/api/content/search":
+			_, _ = w.Write([]byte(`{"results":[]}`))
+		case r.URL.Path == "/rest/api/content" && r.Method == http.MethodPost:
+			var payload struct {
+				Body struct {
+					Storage struct {
+						Value string `json:"value"`
+					} `json:"storage"`
+				} `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode: %v", err)
+			}
+			storage = payload.Body.Storage.Value
+			_, _ = w.Write([]byte(`{"id":"1","title":"Test Page","space":{"key":"TEAM"},"version":{"number":1},"_links":{"webui":"/p/1"}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	bin := buildBinary(t)
+	mdFile := filepath.Join(t.TempDir(), "page.md")
+	if err := os.WriteFile(mdFile, []byte("# Test Page\n\nContent."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "page", "create", "--json", "--space", "TEAM", mdFile)
+	cmd.Env = testEnv(srv.URL)
+	out, err := cmd.Output()
+	if err != nil {
+		stderr := ""
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = string(ee.Stderr)
+		}
+		t.Fatalf("create: %v\nstderr: %s\nstdout: %s", err, stderr, out)
+	}
+	if strings.Contains(storage, "<h1>") {
+		t.Fatalf("title heading was left in the body: %s", storage)
+	}
+	if !strings.Contains(storage, "Content.") {
+		t.Fatalf("body missing content: %s", storage)
+	}
+}

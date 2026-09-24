@@ -2,6 +2,7 @@ package output
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -68,8 +69,7 @@ func (w *Writer) WriteError(command string, err error) {
 	if w.JSON {
 		var appErr *apperror.AppError
 		var errPayload map[string]any
-		if e, ok := err.(*apperror.AppError); ok {
-			appErr = e
+		if errors.As(err, &appErr) {
 			errPayload = map[string]any{
 				"code":    int(appErr.Code()),
 				"kind":    string(appErr.Kind),

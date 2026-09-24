@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 )
 
@@ -19,11 +21,16 @@ var pingCmd = &cobra.Command{
 			return err
 		}
 
-		return w.Write("ping", map[string]any{
+		result := map[string]any{
 			"ok":             true,
 			"url":            cfg.URL,
 			"server_version": version,
-		})
+		}
+		if jsonFlag {
+			return w.Write("ping", result)
+		}
+		fmt.Printf("ok %s server %s\n", cfg.URL, version)
+		return nil
 	},
 }
 
