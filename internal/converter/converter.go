@@ -16,7 +16,7 @@ import (
 // 段落だけに印がある場合は <p> ごとマクロ要素へ戻す。
 var macroTokenRE = regexp.MustCompile(`(?i)<p>\s*%%conflux-macro:([0-9a-f]+)%%\s*</p>|%%conflux-macro:([0-9a-f]+)%%`)
 
-// Converter は port.Converter を実装する。
+// Converter は Markdown と Confluence storage format を相互変換する。
 type Converter struct {
 	md goldmark.Markdown
 }

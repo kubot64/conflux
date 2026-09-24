@@ -14,7 +14,7 @@ import (
 
 const maxEntries = 1000
 
-// Logger は port.HistoryLogger を実装する。
+// Logger はローカルの history.json を読み書きする。
 type Logger struct {
 	dir         string
 	redactTitle bool
