@@ -4,7 +4,7 @@ go 1.26.11
 
 require (
 	github.com/PuerkitoBio/goquery v1.13.0
-	github.com/sergi/go-diff v1.4.0
+	github.com/sergi/go-diff v1.4.5
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/goldmark v1.8.7
 )
